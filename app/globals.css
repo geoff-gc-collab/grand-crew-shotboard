@@ -264,6 +264,23 @@ a.back-link:hover{color:var(--paper);}
   font-family:var(--sans);font-size:12px;padding:6px 8px;outline:none;
 }
 
+.timing-cell{position:relative;display:flex;align-items:center;gap:2px;width:100%;}
+.timing-cell .gcell-input{flex:1;}
+.timing-menu-btn{
+  width:18px;height:18px;border-radius:4px;border:none;background:transparent;color:var(--paper-faint);
+  cursor:pointer;font-size:12px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+}
+.timing-menu-btn:hover{background:var(--ink-3);color:var(--paper);}
+.timing-menu{
+  position:absolute;top:26px;left:0;z-index:7;background:var(--ink-3);border:1px solid var(--line);
+  border-radius:7px;padding:4px;min-width:200px;box-shadow:0 8px 24px rgba(0,0,0,0.4);
+}
+.timing-menu button{
+  display:block;width:100%;text-align:left;padding:7px 9px;font-size:12px;font-family:var(--sans);
+  background:none;border:none;color:var(--paper);cursor:pointer;border-radius:5px;
+}
+.timing-menu button:hover{background:var(--ink-2);}
+
 .grows{display:flex;flex-direction:column;}
 .grow{
   display:flex;background:var(--ink-2);border-bottom:1px solid var(--line);border-left:3px solid transparent;
@@ -339,7 +356,7 @@ a.back-link:hover{color:var(--paper);}
   body{background:#fff;}
   .back-link, .head-actions, .filters, .tag-legend, .day-controls .icon-btn, .add-row, .add-day-btn,
   .footer-note, .toast, .gpin-right, .drag-handle, .image-slot-actions, .col-remove, .col-form,
-  .lightbox-overlay, .chev{
+  .lightbox-overlay, .chev, .timing-menu-btn, .timing-menu{
     display:none !important;
   }
   .wrap.wide{max-width:none;padding:0;margin:0;}

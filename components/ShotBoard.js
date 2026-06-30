@@ -1,8 +1,8 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import Link from "next/link";
 import { dayAccentStyle } from "@/lib/color";
-import { DEFAULT_COLUMN_ORDER, buildColumnDefs } from "@/lib/columns";
+import { DEFAULT_COLUMN_ORDER, FIXED_COLUMN_TYPES, buildColumnDefs } from "@/lib/columns";
 
 const PALETTE = ["#5A8AC0", "#DD8A4D", "#6FAE8C", "#9B7FC7", "#D9714E", "#4FB3B0"];
 const TAG_COLORS = ["#5A8AC0", "#DD8A4D", "#6FAE8C", "#9B7FC7", "#D9714E", "#4FB3B0", "#D9B65A", "#E899B8"];
@@ -18,6 +18,42 @@ async function uploadFile(file) {
   const res = await fetch("/api/upload", { method: "POST", body: form });
   if (!res.ok) throw new Error("Upload failed");
   return res.json();
+}
+
+function columnFlexStyle(col) {
+  if (FIXED_COLUMN_TYPES.includes(col.type)) {
+    return { flex: `0 0 ${col.width}px`, width: col.width };
+  }
+  return { flex: `1 1 ${col.width}px`, minWidth: Math.round(col.width * 0.55) };
+}
+
+// ---- Timing helpers ("9:00 AM" / "9:00" <-> minutes since midnight) ----
+function timeToMinutes(str) {
+  if (!str) return null;
+  const m = String(str).trim().match(/^(\d{1,2})(?::?(\d{2}))?\s*([AaPp][Mm])?$/);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = m[2] ? parseInt(m[2], 10) : 0;
+  const ampm = m[3] ? m[3].toUpperCase() : null;
+  if (ampm === "PM" && h !== 12) h += 12;
+  if (ampm === "AM" && h === 12) h = 0;
+  return h * 60 + min;
+}
+
+function minutesToLabel(mins) {
+  mins = ((mins % 1440) + 1440) % 1440;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const ampm = h >= 12 ? "PM" : "AM";
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+function lastTimeInRange(label) {
+  if (!label) return null;
+  const parts = label.split(/[–-]/);
+  return timeToMinutes(parts[parts.length - 1]);
 }
 
 export default function ShotBoard({ initialProject, initialScenes }) {
@@ -172,6 +208,15 @@ export default function ShotBoard({ initialProject, initialScenes }) {
       });
       const json = await res.json();
       if (json.scene) {
+        // Default new scenes to a 20-minute continuation of the day's last timing slot.
+        const daySceneList = scenes.filter((s) => s.dayId === dayId).sort((a, b) => a.order - b.order);
+        const last = daySceneList[daySceneList.length - 1];
+        const lastEnd = last ? lastTimeInRange(last.timing) : null;
+        if (lastEnd != null) {
+          const label = `${minutesToLabel(lastEnd)} – ${minutesToLabel(lastEnd + 20)}`;
+          json.scene.timing = label;
+          updateSceneField(json.scene.id, "timing", label, false);
+        }
         setScenes((prev) => [...prev, json.scene]);
         setCollapsedDays((prev) => {
           const next = new Set(prev);
@@ -182,6 +227,25 @@ export default function ShotBoard({ initialProject, initialScenes }) {
       setStatus("saved");
     } catch (e) {
       setStatus("error");
+    }
+  }
+
+  async function autoFillTiming(dayId, fromSceneId, daySceneList) {
+    const fromIdx = daySceneList.findIndex((s) => s.id === fromSceneId);
+    if (fromIdx === -1) return;
+    const guessStart = timeToMinutes(daySceneList[fromIdx].timing) ?? lastTimeInRange(daySceneList[fromIdx - 1]?.timing) ?? 9 * 60;
+    const input = window.prompt("Start time for this shot (e.g. 9:00 AM):", minutesToLabel(guessStart));
+    if (input === null) return;
+    const start0 = timeToMinutes(input);
+    if (start0 == null) {
+      showToast("Couldn't read that time — try e.g. 9:00 AM");
+      return;
+    }
+    let start = start0;
+    for (let i = fromIdx; i < daySceneList.length; i++) {
+      const end = start + 20;
+      updateSceneField(daySceneList[i].id, "timing", `${minutesToLabel(start)} – ${minutesToLabel(end)}`, false);
+      start = end;
     }
   }
 
@@ -324,8 +388,8 @@ export default function ShotBoard({ initialProject, initialScenes }) {
       const daySceneList = scenes.filter((s) => s.dayId === day.id).sort((a, b) => a.order - b.order);
       text += `${day.label.toUpperCase()}\n${"—".repeat(40)}\n`;
       daySceneList.forEach((s) => {
-        text += `[${s.num}] ${s.title}\n`;
-        text += `  Location: ${s.location} · ${s.shotType}${s.intExt ? " · " + s.intExt : ""}${s.dayNight ? " · " + s.dayNight : ""}\n`;
+        text += `[${s.num}]${s.timing ? " " + s.timing : ""} ${s.title}\n`;
+        text += `  Location: ${s.location} · ${s.shotType}${s.dayNightIntExt ? " · " + s.dayNightIntExt : ""}\n`;
         if (s.talent) text += `  Talent: ${s.talent}\n`;
         if (s.extras) text += `  Extras: ${s.extras}\n`;
         if (s.notes) text += `  Notes: ${s.notes}\n`;
@@ -439,7 +503,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
             <div
               key={col.key}
               className="gcell gcell-header"
-              style={{ width: col.width }}
+              style={columnFlexStyle(col)}
               draggable
               onDragStart={(e) => handleColDragStart(e, col.key)}
               onDragOver={(e) => e.preventDefault()}
@@ -550,6 +614,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
                     autoNumber={project.autoNumber ? autoNumberMap.get(scene.id) : null}
                     onField={(field, value) => updateSceneField(scene.id, field, value, false)}
                     onCustomField={(key, value) => updateSceneField(scene.id, key, value, true)}
+                    onAutoFillTiming={() => autoFillTiming(day.id, scene.id, daySceneList)}
                     onDelete={() => deleteScene(scene)}
                     onDragStart={(e) => handleDragStart(e, scene.id)}
                     onDragEnd={() => setDragId(null)}
@@ -586,28 +651,18 @@ export default function ShotBoard({ initialProject, initialScenes }) {
   );
 }
 
-function GridRow({ scene, columns, isDragging, autoNumber, onField, onCustomField, onDelete, onDragStart, onDragEnd, onDropOnCard }) {
-  const [local, setLocal] = useState(scene);
-
-  useEffect(() => {
-    setLocal(scene);
-  }, [scene.id]);
-
-  function change(field, value) {
-    setLocal((prev) => ({ ...prev, [field]: value }));
-    onField(field, value);
-  }
-
-  function changeCustom(key, value) {
-    setLocal((prev) => ({ ...prev, customFields: { ...(prev.customFields || {}), [key]: value } }));
-    onCustomField(key, value);
-  }
+// Reads/writes go straight through the live `scene` prop (the parent updates
+// its `scenes` array synchronously on every edit), so every row always shows
+// current data even when another row's action changes it (auto-fill timing,
+// drag-and-drop color tags, etc.) — no local mirror to go stale.
+function GridRow({ scene, columns, isDragging, autoNumber, onField, onCustomField, onAutoFillTiming, onDelete, onDragStart, onDragEnd, onDropOnCard }) {
+  const [timingMenuOpen, setTimingMenuOpen] = useState(false);
 
   function renderCell(col) {
     switch (col.type) {
       case "textarea": {
-        const val = col.custom ? (local.customFields?.[col.key] || "") : (local[col.key] || "");
-        const onChangeVal = (v) => (col.custom ? changeCustom(col.key, v) : change(col.key, v));
+        const val = col.custom ? (scene.customFields?.[col.key] || "") : (scene[col.key] || "");
+        const onChangeVal = (v) => (col.custom ? onCustomField(col.key, v) : onField(col.key, v));
         return (
           <textarea
             className="gcell-textarea"
@@ -617,8 +672,8 @@ function GridRow({ scene, columns, isDragging, autoNumber, onField, onCustomFiel
         );
       }
       case "datalist": {
-        const val = col.custom ? (local.customFields?.[col.key] || "") : (local[col.key] || "");
-        const onChangeVal = (v) => (col.custom ? changeCustom(col.key, v) : change(col.key, v));
+        const val = col.custom ? (scene.customFields?.[col.key] || "") : (scene[col.key] || "");
+        const onChangeVal = (v) => (col.custom ? onCustomField(col.key, v) : onField(col.key, v));
         return (
           <input
             className="gcell-input"
@@ -629,24 +684,35 @@ function GridRow({ scene, columns, isDragging, autoNumber, onField, onCustomFiel
           />
         );
       }
-      case "link":
+      case "timing":
         return (
-          <div className="gcell-link-row">
+          <div className="timing-cell" onContextMenu={(e) => { e.preventDefault(); setTimingMenuOpen(true); }}>
             <input
               className="gcell-input"
-              placeholder="https://…"
-              value={local.ref || ""}
-              onChange={(e) => change("ref", e.target.value)}
+              value={scene.timing || ""}
+              placeholder="—"
+              onChange={(e) => onField("timing", e.target.value)}
             />
-            {local.ref && (
-              <a className="gcell-link-open" href={local.ref} target="_blank" rel="noopener noreferrer">↗</a>
+            <button
+              className="timing-menu-btn"
+              onClick={() => setTimingMenuOpen((v) => !v)}
+              title="Timing options (or right-click the cell)"
+            >
+              ⋯
+            </button>
+            {timingMenuOpen && (
+              <div className="timing-menu" onMouseLeave={() => setTimingMenuOpen(false)}>
+                <button onClick={() => { setTimingMenuOpen(false); onAutoFillTiming(); }}>
+                  Auto-fill 20 min from here…
+                </button>
+              </div>
             )}
           </div>
         );
       case "image": {
         const isCustom = !!col.custom;
-        const value = isCustom ? (local.customFields?.[col.key] || null) : ((local.images && local.images[0]) || null);
-        const setValue = (img) => (isCustom ? changeCustom(col.key, img) : change("images", img ? [img] : []));
+        const value = isCustom ? (scene.customFields?.[col.key] || null) : ((scene.images && scene.images[0]) || null);
+        const setValue = (img) => (isCustom ? onCustomField(col.key, img) : onField("images", img ? [img] : []));
         return <SingleImageCell image={value} onChange={setValue} />;
       }
       case "num":
@@ -656,8 +722,8 @@ function GridRow({ scene, columns, isDragging, autoNumber, onField, onCustomFiel
         return (
           <input
             className="gcell-input"
-            value={local.num || ""}
-            onChange={(e) => change("num", e.target.value)}
+            value={scene.num || ""}
+            onChange={(e) => onField("num", e.target.value)}
           />
         );
       default:
@@ -666,9 +732,9 @@ function GridRow({ scene, columns, isDragging, autoNumber, onField, onCustomFiel
         return (
           <textarea
             className="gcell-textarea"
-            value={local[col.key] || ""}
+            value={scene[col.key] || ""}
             placeholder={col.key === "title" ? "Untitled scene" : ""}
-            onChange={(e) => change(col.key, e.target.value)}
+            onChange={(e) => onField(col.key, e.target.value)}
           />
         );
     }
@@ -687,7 +753,7 @@ function GridRow({ scene, columns, isDragging, autoNumber, onField, onCustomFiel
         </span>
       </div>
       {columns.map((col) => (
-        <div key={col.key} className={`gcell gcell-${col.type}`} style={{ width: col.width }}>
+        <div key={col.key} className={`gcell gcell-${col.type}`} style={columnFlexStyle(col)}>
           {renderCell(col)}
         </div>
       ))}
