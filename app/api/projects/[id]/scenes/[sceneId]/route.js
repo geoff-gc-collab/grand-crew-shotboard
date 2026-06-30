@@ -20,6 +20,19 @@ export async function PATCH(req, { params }) {
     if (typeof body[f] === "string") scene[f] = body[f];
   });
 
+  if (Array.isArray(body.images)) {
+    scene.images = body.images.filter((img) => img && typeof img.url === "string");
+  }
+
+  if (body.colorTag === null) {
+    scene.colorTag = null;
+  } else if (body.colorTag && typeof body.colorTag.color === "string") {
+    scene.colorTag = {
+      label: typeof body.colorTag.label === "string" ? body.colorTag.label : "",
+      color: body.colorTag.color,
+    };
+  }
+
   if (body.dayId && body.dayId !== scene.dayId) {
     const siblings = data.scenes.filter(
       (s) => s.projectId === id && s.dayId === body.dayId

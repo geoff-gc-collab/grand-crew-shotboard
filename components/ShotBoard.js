@@ -9,6 +9,14 @@ function isImageUrl(url) {
   return /\.(jpe?g|png|gif|webp|avif)(\?.*)?$/i.test(url || "");
 }
 
+async function uploadFile(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/api/upload", { method: "POST", body: form });
+  if (!res.ok) throw new Error("Upload failed");
+  return res.json();
+}
+
 export default function ShotBoard({ initialProject, initialScenes }) {
   const [project, setProject] = useState(initialProject);
   const [scenes, setScenes] = useState(initialScenes);
@@ -18,6 +26,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
   const [swatchOpenFor, setSwatchOpenFor] = useState(null);
   const [status, setStatus] = useState("saved");
   const [toast, setToast] = useState(null);
+  const [dragId, setDragId] = useState(null);
   const lastDeletedRef = useRef(null);
   const toastTimerRef = useRef(null);
   const patchTimers = useRef({});
@@ -97,6 +106,56 @@ export default function ShotBoard({ initialProject, initialScenes }) {
     } catch (e) {
       setStatus("error");
     }
+  }
+
+  // ---- Drag-and-drop reorder ----
+  async function reorderDay(dayId, orderedIds) {
+    setScenes((prev) => {
+      const orderMap = new Map(orderedIds.map((id, i) => [id, i]));
+      return prev.map((s) => (orderMap.has(s.id) ? { ...s, dayId, order: orderMap.get(s.id) } : s));
+    });
+    setStatus("saving");
+    try {
+      await fetch(`/api/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reorderDay: { dayId, orderedIds } }),
+      });
+      setStatus("saved");
+    } catch (e) {
+      setStatus("error");
+    }
+  }
+
+  function handleDragStart(e, sceneId) {
+    setDragId(sceneId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", sceneId);
+  }
+
+  function handleDropOnScene(e, targetScene, dayId, daySceneList) {
+    e.preventDefault();
+    e.stopPropagation();
+    const draggedId = e.dataTransfer.getData("text/plain");
+    if (!draggedId || draggedId === targetScene.id) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const before = e.clientY < rect.top + rect.height / 2;
+    const currentIds = daySceneList.map((s) => s.id).filter((id) => id !== draggedId);
+    const targetIdx = currentIds.indexOf(targetScene.id);
+    const insertAt = before ? targetIdx : targetIdx + 1;
+    currentIds.splice(insertAt, 0, draggedId);
+    reorderDay(dayId, currentIds);
+    setDragId(null);
+  }
+
+  function handleDropOnDayEnd(e, dayId, daySceneList) {
+    e.preventDefault();
+    const draggedId = e.dataTransfer.getData("text/plain");
+    if (!draggedId) return;
+    const currentIds = daySceneList.map((s) => s.id).filter((id) => id !== draggedId);
+    currentIds.push(draggedId);
+    reorderDay(dayId, currentIds);
+    setDragId(null);
   }
 
   async function changeSceneDay(scene, dayId) {
@@ -345,24 +404,32 @@ export default function ShotBoard({ initialProject, initialScenes }) {
               </div>
             </div>
 
-            <div className="cards">
+            <div
+              className="cards"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => handleDropOnDayEnd(e, day.id, daySceneList)}
+            >
               {daySceneList.map((scene) => (
                 <SceneCard
                   key={scene.id}
                   scene={scene}
                   isOpen={openIds.has(scene.id)}
                   days={project.days}
+                  isDragging={dragId === scene.id}
                   onToggle={() => toggleOpen(scene.id)}
                   onField={(field, value) => updateSceneField(scene.id, field, value)}
                   onMove={(dir) => moveScene(scene, dir)}
                   onDayChange={(dayId) => changeSceneDay(scene, dayId)}
                   onDelete={() => deleteScene(scene)}
+                  onDragStart={(e) => handleDragStart(e, scene.id)}
+                  onDragEnd={() => setDragId(null)}
+                  onDropOnCard={(e) => handleDropOnScene(e, scene, day.id, daySceneList)}
                   canMoveUp={daySceneList.indexOf(scene) > 0}
                   canMoveDown={daySceneList.indexOf(scene) < daySceneList.length - 1}
                 />
               ))}
               {daySceneList.length === 0 && (
-                <div className="empty-state">No scenes yet on this day.</div>
+                <div className="empty-state">No scenes yet on this day. Drag a card here.</div>
               )}
             </div>
 
@@ -390,8 +457,14 @@ export default function ShotBoard({ initialProject, initialScenes }) {
   );
 }
 
-function SceneCard({ scene, isOpen, days, onToggle, onField, onMove, onDayChange, onDelete, canMoveUp, canMoveDown }) {
+const TAG_COLORS = ["#5A8AC0", "#DD8A4D", "#6FAE8C", "#9B7FC7", "#D9714E", "#4FB3B0", "#D9B65A", "#E899B8"];
+
+function SceneCard({
+  scene, isOpen, days, isDragging, onToggle, onField, onMove, onDayChange, onDelete,
+  onDragStart, onDragEnd, onDropOnCard, canMoveUp, canMoveDown,
+}) {
   const [local, setLocal] = useState(scene);
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
 
   useEffect(() => {
     setLocal(scene);
@@ -402,12 +475,42 @@ function SceneCard({ scene, isOpen, days, onToggle, onField, onMove, onDayChange
     onField(field, value);
   }
 
+  function setColorTag(color) {
+    const next = { label: local.colorTag?.label || "", color };
+    change("colorTag", next);
+  }
+
+  function setColorTagLabel(label) {
+    if (!local.colorTag) return;
+    change("colorTag", { ...local.colorTag, label });
+  }
+
+  function clearColorTag() {
+    setLocal((prev) => ({ ...prev, colorTag: null }));
+    onField("colorTag", null);
+    setTagPickerOpen(false);
+  }
+
   return (
-    <div className="card">
+    <div
+      className={`card ${isDragging ? "dragging" : ""}`}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={onDropOnCard}
+    >
       <div className="card-row" onClick={(e) => {
-        if (e.target.closest(".card-title") || e.target.closest(".card-controls")) return;
+        if (e.target.closest(".card-title") || e.target.closest(".card-controls") || e.target.closest(".tag-picker-wrap")) return;
         onToggle();
       }}>
+        <span
+          className="drag-handle"
+          draggable
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          onClick={(e) => e.stopPropagation()}
+          title="Drag to reorder"
+        >
+          ⠿
+        </span>
         <span className={`scene-tag ${local.num === "—" ? "empty" : ""}`}>{local.num}</span>
         <div className="card-title">
           <input
@@ -416,6 +519,39 @@ function SceneCard({ scene, isOpen, days, onToggle, onField, onMove, onDayChange
             onClick={(e) => e.stopPropagation()}
             onChange={(e) => change("title", e.target.value)}
           />
+        </div>
+        <div className="tag-picker-wrap" style={{ position: "relative" }}>
+          <button
+            className="color-tag-chip"
+            style={local.colorTag ? { background: local.colorTag.color, color: "#0E1116" } : undefined}
+            onClick={(e) => { e.stopPropagation(); setTagPickerOpen((v) => !v); }}
+            title="Set color tag"
+          >
+            {local.colorTag ? (local.colorTag.label || "Tag") : "+ Tag"}
+          </button>
+          {tagPickerOpen && (
+            <div className="tag-picker" onClick={(e) => e.stopPropagation()}>
+              <input
+                className="tag-label-input"
+                placeholder="Label, e.g. Neutral"
+                value={local.colorTag?.label || ""}
+                onChange={(e) => setColorTagLabel(e.target.value)}
+              />
+              <div className="swatch-row">
+                {TAG_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    className={`color-swatch ${local.colorTag?.color === c ? "active" : ""}`}
+                    style={{ background: c }}
+                    onClick={() => setColorTag(c)}
+                  />
+                ))}
+              </div>
+              {local.colorTag && (
+                <button className="tag-clear" onClick={clearColorTag}>Clear tag</button>
+              )}
+            </div>
+          )}
         </div>
         <div className="card-meta">
           {local.location && <span className="pill">{truncate(local.location, 22)}</span>}
@@ -473,17 +609,15 @@ function SceneCard({ scene, isOpen, days, onToggle, onField, onMove, onDayChange
               <label>Shot description</label>
               <textarea value={local.desc} onChange={(e) => change("desc", e.target.value)} />
             </div>
-            <div className="field">
-              <label>Photo board (image link)</label>
-              <input
-                placeholder="https://…"
-                value={local.photo}
-                onChange={(e) => change("photo", e.target.value)}
+            <div className="field full">
+              <label>Reference images</label>
+              <ImageGallery
+                images={local.images || []}
+                onChange={(images) => change("images", images)}
               />
-              {isImageUrl(local.photo) && <img className="thumb show" src={local.photo} alt="" />}
             </div>
             <div className="field">
-              <label>Shot reference</label>
+              <label>Shot reference (link)</label>
               <div className="ref-row">
                 <input
                   placeholder="https://…"
@@ -504,4 +638,72 @@ function SceneCard({ scene, isOpen, days, onToggle, onField, onMove, onDayChange
 
 function truncate(str, n) {
   return str.length > n ? str.slice(0, n - 1) + "…" : str;
+}
+
+function ImageGallery({ images, onChange }) {
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
+
+  async function handleFiles(fileList) {
+    const files = Array.from(fileList || []).filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    setUploading(true);
+    try {
+      const uploaded = await Promise.all(files.map(uploadFile));
+      onChange([...images, ...uploaded.map((u) => ({ id: u.publicId, url: u.url }))]);
+    } catch (e) {
+      // upload failed silently; user can retry
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function removeImage(id) {
+    onChange(images.filter((img) => img.id !== id));
+  }
+
+  return (
+    <div>
+      <div
+        className={`gallery-drop ${dragOver ? "over" : ""}`}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          handleFiles(e.dataTransfer.files);
+        }}
+        onClick={() => fileInputRef.current?.click()}
+        onPaste={(e) => handleFiles(e.clipboardData?.files)}
+        tabIndex={0}
+      >
+        {uploading ? "Uploading…" : "Drop images or GIFs here, or click to choose"}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: "none" }}
+          onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }}
+        />
+      </div>
+      {images.length > 0 && (
+        <div className="gallery-grid">
+          {images.map((img) => (
+            <div key={img.id} className="gallery-thumb">
+              <img src={img.url} alt="" />
+              <button
+                className="gallery-remove"
+                onClick={(e) => { e.stopPropagation(); removeImage(img.id); }}
+                title="Remove image"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }

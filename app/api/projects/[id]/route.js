@@ -57,6 +57,20 @@ export async function PATCH(req, { params }) {
     project.days = project.days.filter((d) => d.id !== body.removeDay);
   }
 
+  // body.reorderDay: { dayId, orderedIds } — drag-and-drop reorder, possibly
+  // moving a scene into a different day. orderedIds is the full, final list
+  // of scene ids for that day in display order.
+  if (body.reorderDay && body.reorderDay.dayId && Array.isArray(body.reorderDay.orderedIds)) {
+    const { dayId, orderedIds } = body.reorderDay;
+    orderedIds.forEach((sceneId, index) => {
+      const scene = data.scenes.find((s) => s.id === sceneId && s.projectId === id);
+      if (scene) {
+        scene.dayId = dayId;
+        scene.order = index;
+      }
+    });
+  }
+
   await writeData(data);
   return NextResponse.json({ project });
 }
