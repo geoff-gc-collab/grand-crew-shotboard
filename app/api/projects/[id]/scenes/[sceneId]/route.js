@@ -34,6 +34,10 @@ export async function PATCH(req, { params }) {
     };
   }
 
+  if (body.customFields && typeof body.customFields === "object") {
+    scene.customFields = { ...(scene.customFields || {}), ...body.customFields };
+  }
+
   if (body.dayId && body.dayId !== scene.dayId) {
     const siblings = data.scenes.filter(
       (s) => s.projectId === id && s.dayId === body.dayId

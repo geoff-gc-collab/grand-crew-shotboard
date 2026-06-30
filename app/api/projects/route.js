@@ -25,6 +25,7 @@ export async function POST(req) {
     createdAt: new Date().toISOString(),
     columnOrder: DEFAULT_COLUMN_ORDER,
     autoNumber: false,
+    customColumns: [],
     days: [{ id: "day1", label: "Day 1", color: PALETTE[0] }],
   };
   data.projects.push(project);

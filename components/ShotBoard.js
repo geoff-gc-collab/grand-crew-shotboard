@@ -2,10 +2,15 @@
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { dayAccentStyle } from "@/lib/color";
-import { COLUMN_DEFS, DEFAULT_COLUMN_ORDER, columnDef } from "@/lib/columns";
+import { DEFAULT_COLUMN_ORDER, buildColumnDefs } from "@/lib/columns";
 
 const PALETTE = ["#5A8AC0", "#DD8A4D", "#6FAE8C", "#9B7FC7", "#D9714E", "#4FB3B0"];
 const TAG_COLORS = ["#5A8AC0", "#DD8A4D", "#6FAE8C", "#9B7FC7", "#D9714E", "#4FB3B0", "#D9B65A", "#E899B8"];
+const COLUMN_TYPE_OPTIONS = [
+  { value: "image", label: "Visual (16:9 image)" },
+  { value: "text", label: "Long text" },
+  { value: "dropdown", label: "Dropdown" },
+];
 
 async function uploadFile(file) {
   const form = new FormData();
@@ -24,14 +29,20 @@ export default function ShotBoard({ initialProject, initialScenes }) {
   const [status, setStatus] = useState("saved");
   const [toast, setToast] = useState(null);
   const [dragId, setDragId] = useState(null);
+  const [colFormOpen, setColFormOpen] = useState(false);
+  const [colLabel, setColLabel] = useState("");
+  const [colType, setColType] = useState("text");
+  const [colOptions, setColOptions] = useState("");
   const lastDeletedRef = useRef(null);
   const toastTimerRef = useRef(null);
   const patchTimers = useRef({});
   const pendingFields = useRef({});
 
   const projectId = project.id;
+  const allColumns = buildColumnDefs(project);
+  const columnByKey = new Map(allColumns.map((c) => [c.key, c]));
   const columnOrder = project.columnOrder && project.columnOrder.length ? project.columnOrder : DEFAULT_COLUMN_ORDER;
-  const visibleColumns = columnOrder.map(columnDef).filter(Boolean);
+  const visibleColumns = columnOrder.map((k) => columnByKey.get(k)).filter(Boolean);
 
   function showToast(msg) {
     setToast(msg);
@@ -48,9 +59,20 @@ export default function ShotBoard({ initialProject, initialScenes }) {
   }
 
   // ---- Scene field edits (debounced PATCH per scene) ----
-  function updateSceneField(sceneId, field, value) {
-    setScenes((prev) => prev.map((s) => (s.id === sceneId ? { ...s, [field]: value } : s)));
-    pendingFields.current[sceneId] = { ...(pendingFields.current[sceneId] || {}), [field]: value };
+  function updateSceneField(sceneId, field, value, custom) {
+    setScenes((prev) =>
+      prev.map((s) => {
+        if (s.id !== sceneId) return s;
+        return custom ? { ...s, customFields: { ...(s.customFields || {}), [field]: value } } : { ...s, [field]: value };
+      })
+    );
+    const entry = pendingFields.current[sceneId] || {};
+    if (custom) {
+      entry.customFields = { ...(entry.customFields || {}), [field]: value };
+    } else {
+      entry[field] = value;
+    }
+    pendingFields.current[sceneId] = entry;
     setStatus("saving");
     clearTimeout(patchTimers.current[sceneId]);
     patchTimers.current[sceneId] = setTimeout(() => flushScene(sceneId), 500);
@@ -97,6 +119,23 @@ export default function ShotBoard({ initialProject, initialScenes }) {
     e.dataTransfer.setData("text/plain", sceneId);
   }
 
+  // Rows accept two kinds of drops: another row (reorder) or a color swatch
+  // dragged from the legend (recolor that row, overriding the day color).
+  function handleRowDrop(e, scene, dayId, daySceneList) {
+    if (e.dataTransfer.types.includes("application/x-tag-color")) {
+      e.preventDefault();
+      e.stopPropagation();
+      const val = e.dataTransfer.getData("application/x-tag-color");
+      if (val === "__clear__") {
+        updateSceneField(scene.id, "colorTag", null);
+      } else {
+        updateSceneField(scene.id, "colorTag", { label: "", color: val });
+      }
+      return;
+    }
+    handleDropOnScene(e, scene, dayId, daySceneList);
+  }
+
   function handleDropOnScene(e, targetScene, dayId, daySceneList) {
     e.preventDefault();
     e.stopPropagation();
@@ -113,6 +152,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
   }
 
   function handleDropOnDayEnd(e, dayId, daySceneList) {
+    if (e.dataTransfer.types.includes("application/x-tag-color")) return;
     e.preventDefault();
     const draggedId = e.dataTransfer.getData("text/plain");
     if (!draggedId) return;
@@ -260,6 +300,24 @@ export default function ShotBoard({ initialProject, initialScenes }) {
     patchProject({ columnOrder: order });
   }
 
+  function submitAddColumn() {
+    if (!colLabel.trim()) return;
+    const body = { addColumn: { label: colLabel.trim(), type: colType } };
+    if (colType === "dropdown") {
+      body.addColumn.options = colOptions.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+    patchProject(body);
+    setColLabel("");
+    setColType("text");
+    setColOptions("");
+    setColFormOpen(false);
+  }
+
+  function removeColumn(key) {
+    if (!confirm("Remove this column? Its data will no longer be shown (existing values are kept on each scene, but hidden).")) return;
+    patchProject({ removeColumn: { key } });
+  }
+
   function copySummary() {
     let text = `${project.name.toUpperCase()} — SHOT BOARD\n\n`;
     project.days.forEach((day) => {
@@ -293,6 +351,8 @@ export default function ShotBoard({ initialProject, initialScenes }) {
         .forEach((s) => autoNumberMap.set(s.id, n++));
     });
   }
+
+  const datalistColumns = visibleColumns.filter((c) => c.type === "datalist" && c.options && c.options.length);
 
   return (
     <div className="wrap wide">
@@ -331,26 +391,46 @@ export default function ShotBoard({ initialProject, initialScenes }) {
         </div>
       </div>
 
-      <div className="filters">
-        <button className={`chip ${filter === "all" ? "active" : ""}`} onClick={() => setFilter("all")}>
-          All scenes
-        </button>
-        {project.days.map((d) => (
-          <button key={d.id} className={`chip ${filter === d.id ? "active" : ""}`} onClick={() => setFilter(d.id)}>
-            {d.label}
+      <div className="filters-row">
+        <div className="filters">
+          <button className={`chip ${filter === "all" ? "active" : ""}`} onClick={() => setFilter("all")}>
+            All scenes
           </button>
-        ))}
+          {project.days.map((d) => (
+            <button key={d.id} className={`chip ${filter === d.id ? "active" : ""}`} onClick={() => setFilter(d.id)}>
+              {d.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="tag-legend">
+          <span className="tag-legend-label">Color key — drag onto a row:</span>
+          {TAG_COLORS.map((c) => (
+            <div
+              key={c}
+              className="tag-swatch-drag"
+              style={{ background: c }}
+              draggable
+              onDragStart={(e) => e.dataTransfer.setData("application/x-tag-color", c)}
+              title="Drag onto a row to recolor it"
+            />
+          ))}
+          <div
+            className="tag-swatch-drag clear"
+            draggable
+            onDragStart={(e) => e.dataTransfer.setData("application/x-tag-color", "__clear__")}
+            title="Drag onto a row to reset it to the day color"
+          >
+            ⊘
+          </div>
+        </div>
       </div>
 
-      <datalist id="dl-shotType">
-        {columnDef("shotType").options.map((o) => <option key={o} value={o} />)}
-      </datalist>
-      <datalist id="dl-intExt">
-        {columnDef("intExt").options.map((o) => <option key={o} value={o} />)}
-      </datalist>
-      <datalist id="dl-dayNight">
-        {columnDef("dayNight").options.map((o) => <option key={o} value={o} />)}
-      </datalist>
+      {datalistColumns.map((col) => (
+        <datalist key={col.key} id={`dl-${col.key}`}>
+          {col.options.map((o) => <option key={o} value={o} />)}
+        </datalist>
+      ))}
 
       <div className="grid-wrap">
         <div className="grid-header-row">
@@ -366,10 +446,44 @@ export default function ShotBoard({ initialProject, initialScenes }) {
               onDrop={(e) => handleColDrop(e, col.key)}
               title="Drag to reorder column"
             >
-              {col.label}
+              <span>{col.label}</span>
+              {col.custom && (
+                <button
+                  className="col-remove"
+                  onClick={(e) => { e.stopPropagation(); removeColumn(col.key); }}
+                  title="Remove column"
+                >
+                  ✕
+                </button>
+              )}
             </div>
           ))}
-          <div className="gcell gpin-right" />
+          <div className="gcell gpin-right" style={{ position: "relative" }}>
+            <button className="icon-btn" title="Add column" onClick={() => setColFormOpen((v) => !v)}>+</button>
+            {colFormOpen && (
+              <div className="col-form">
+                <input
+                  className="tag-label-input"
+                  placeholder="Column name"
+                  value={colLabel}
+                  onChange={(e) => setColLabel(e.target.value)}
+                  autoFocus
+                />
+                <select className="col-form-select" value={colType} onChange={(e) => setColType(e.target.value)}>
+                  {COLUMN_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+                {colType === "dropdown" && (
+                  <input
+                    className="tag-label-input"
+                    placeholder="Options, comma separated"
+                    value={colOptions}
+                    onChange={(e) => setColOptions(e.target.value)}
+                  />
+                )}
+                <button className="btn small primary" onClick={submitAddColumn}>Add column</button>
+              </div>
+            )}
+          </div>
         </div>
 
         {visibleDays.map((day) => {
@@ -434,11 +548,12 @@ export default function ShotBoard({ initialProject, initialScenes }) {
                     columns={visibleColumns}
                     isDragging={dragId === scene.id}
                     autoNumber={project.autoNumber ? autoNumberMap.get(scene.id) : null}
-                    onField={(field, value) => updateSceneField(scene.id, field, value)}
+                    onField={(field, value) => updateSceneField(scene.id, field, value, false)}
+                    onCustomField={(key, value) => updateSceneField(scene.id, key, value, true)}
                     onDelete={() => deleteScene(scene)}
                     onDragStart={(e) => handleDragStart(e, scene.id)}
                     onDragEnd={() => setDragId(null)}
-                    onDropOnCard={(e) => handleDropOnScene(e, scene, day.id, daySceneList)}
+                    onDropOnCard={(e) => handleRowDrop(e, scene, day.id, daySceneList)}
                   />
                 ))}
                 {daySceneList.length === 0 && (
@@ -460,7 +575,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
 
       <div className="footer-note">
         Shared with anyone who has access to this tool — edits sync for everyone.<br />
-        Drag the ⠿ handle to reorder rows, drag a column header to reorder columns.
+        Drag the ⠿ handle to reorder rows, drag a column header to reorder columns, drag a color swatch onto a row to tag it.
       </div>
 
       <div className={`toast ${toast ? "show" : ""}`}>
@@ -471,9 +586,8 @@ export default function ShotBoard({ initialProject, initialScenes }) {
   );
 }
 
-function GridRow({ scene, columns, isDragging, autoNumber, onField, onDelete, onDragStart, onDragEnd, onDropOnCard }) {
+function GridRow({ scene, columns, isDragging, autoNumber, onField, onCustomField, onDelete, onDragStart, onDragEnd, onDropOnCard }) {
   const [local, setLocal] = useState(scene);
-  const [tagPickerOpen, setTagPickerOpen] = useState(false);
 
   useEffect(() => {
     setLocal(scene);
@@ -484,40 +598,37 @@ function GridRow({ scene, columns, isDragging, autoNumber, onField, onDelete, on
     onField(field, value);
   }
 
-  function setColorTag(color) {
-    change("colorTag", { label: local.colorTag?.label || "", color });
-  }
-  function setColorTagLabel(label) {
-    if (!local.colorTag) return;
-    change("colorTag", { ...local.colorTag, label });
-  }
-  function clearColorTag() {
-    setLocal((prev) => ({ ...prev, colorTag: null }));
-    onField("colorTag", null);
-    setTagPickerOpen(false);
+  function changeCustom(key, value) {
+    setLocal((prev) => ({ ...prev, customFields: { ...(prev.customFields || {}), [key]: value } }));
+    onCustomField(key, value);
   }
 
   function renderCell(col) {
     switch (col.type) {
-      case "textarea":
+      case "textarea": {
+        const val = col.custom ? (local.customFields?.[col.key] || "") : (local[col.key] || "");
+        const onChangeVal = (v) => (col.custom ? changeCustom(col.key, v) : change(col.key, v));
         return (
           <textarea
             className="gcell-textarea"
-            value={local[col.key] || ""}
-            onChange={(e) => change(col.key, e.target.value)}
-            rows={2}
+            value={val}
+            onChange={(e) => onChangeVal(e.target.value)}
           />
         );
-      case "datalist":
+      }
+      case "datalist": {
+        const val = col.custom ? (local.customFields?.[col.key] || "") : (local[col.key] || "");
+        const onChangeVal = (v) => (col.custom ? changeCustom(col.key, v) : change(col.key, v));
         return (
           <input
             className="gcell-input"
             list={`dl-${col.key}`}
-            value={local[col.key] || ""}
+            value={val}
             placeholder={col.label}
-            onChange={(e) => change(col.key, e.target.value)}
+            onChange={(e) => onChangeVal(e.target.value)}
           />
         );
+      }
       case "link":
         return (
           <div className="gcell-link-row">
@@ -532,50 +643,12 @@ function GridRow({ scene, columns, isDragging, autoNumber, onField, onDelete, on
             )}
           </div>
         );
-      case "images":
-        return (
-          <ImageGallery
-            compact
-            images={local.images || []}
-            onChange={(images) => change("images", images)}
-          />
-        );
-      case "colorTag":
-        return (
-          <div className="tag-picker-wrap" style={{ position: "relative" }}>
-            <button
-              className={`color-tag-chip ${local.colorTag ? "tag-set" : ""}`}
-              style={local.colorTag ? { background: local.colorTag.color, color: "#0E1116" } : undefined}
-              onClick={() => setTagPickerOpen((v) => !v)}
-              title="Set color tag"
-            >
-              {local.colorTag ? (local.colorTag.label || "Tag") : "+ Tag"}
-            </button>
-            {tagPickerOpen && (
-              <div className="tag-picker">
-                <input
-                  className="tag-label-input"
-                  placeholder="Label, e.g. Neutral"
-                  value={local.colorTag?.label || ""}
-                  onChange={(e) => setColorTagLabel(e.target.value)}
-                />
-                <div className="swatch-row">
-                  {TAG_COLORS.map((c) => (
-                    <button
-                      key={c}
-                      className={`color-swatch ${local.colorTag?.color === c ? "active" : ""}`}
-                      style={{ background: c }}
-                      onClick={() => setColorTag(c)}
-                    />
-                  ))}
-                </div>
-                {local.colorTag && (
-                  <button className="tag-clear" onClick={clearColorTag}>Clear tag</button>
-                )}
-              </div>
-            )}
-          </div>
-        );
+      case "image": {
+        const isCustom = !!col.custom;
+        const value = isCustom ? (local.customFields?.[col.key] || null) : ((local.images && local.images[0]) || null);
+        const setValue = (img) => (isCustom ? changeCustom(col.key, img) : change("images", img ? [img] : []));
+        return <SingleImageCell image={value} onChange={setValue} />;
+      }
       default:
         if (col.key === "num" && autoNumber != null) {
           return <div className="gcell-readonly" title="Auto-numbered by row position">{autoNumber}</div>;
@@ -594,7 +667,7 @@ function GridRow({ scene, columns, isDragging, autoNumber, onField, onDelete, on
   return (
     <div
       className={`grow ${isDragging ? "dragging" : ""}`}
-      style={{ borderLeftColor: local.colorTag?.color || "transparent" }}
+      style={{ borderLeftColor: scene.colorTag?.color || "transparent" }}
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDropOnCard}
     >
@@ -615,18 +688,19 @@ function GridRow({ scene, columns, isDragging, autoNumber, onField, onDelete, on
   );
 }
 
-function ImageGallery({ images, onChange, compact }) {
+function SingleImageCell({ image, onChange }) {
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [lightbox, setLightbox] = useState(false);
   const fileInputRef = useRef(null);
 
   async function handleFiles(fileList) {
-    const files = Array.from(fileList || []).filter((f) => f.type.startsWith("image/"));
-    if (!files.length) return;
+    const file = Array.from(fileList || []).find((f) => f.type.startsWith("image/"));
+    if (!file) return;
     setUploading(true);
     try {
-      const uploaded = await Promise.all(files.map(uploadFile));
-      onChange([...images, ...uploaded.map((u) => ({ id: u.publicId, url: u.url }))]);
+      const uploaded = await uploadFile(file);
+      onChange({ id: uploaded.publicId, url: uploaded.url });
     } catch (e) {
       // upload failed silently; user can retry
     } finally {
@@ -634,87 +708,42 @@ function ImageGallery({ images, onChange, compact }) {
     }
   }
 
-  function removeImage(id) {
-    onChange(images.filter((img) => img.id !== id));
-  }
-
-  if (compact) {
-    return (
-      <div
-        className={`gallery-compact ${dragOver ? "over" : ""}`}
-        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          setDragOver(false);
-          handleFiles(e.dataTransfer.files);
-        }}
-      >
-        {images.map((img) => (
-          <div key={img.id} className="gallery-compact-thumb">
-            <img src={img.url} alt="" />
-            <button className="gallery-remove" onClick={() => removeImage(img.id)} title="Remove image">✕</button>
+  return (
+    <div
+      className={`image-slot ${dragOver ? "over" : ""}`}
+      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDragOver(false);
+        handleFiles(e.dataTransfer.files);
+      }}
+    >
+      {image ? (
+        <>
+          <img src={image.url} alt="" onClick={() => setLightbox(true)} />
+          <div className="image-slot-actions">
+            <button onClick={() => fileInputRef.current?.click()} title="Replace image">⟳</button>
+            <button onClick={() => onChange(null)} title="Remove image">✕</button>
           </div>
-        ))}
-        <button
-          className="gallery-compact-add"
-          onClick={() => fileInputRef.current?.click()}
-          title="Add image or GIF"
-        >
+        </>
+      ) : (
+        <button className="image-slot-empty" onClick={() => fileInputRef.current?.click()} title="Add image or GIF">
           {uploading ? "…" : "+"}
         </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          style={{ display: "none" }}
-          onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <div
-        className={`gallery-drop ${dragOver ? "over" : ""}`}
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragOver(false);
-          handleFiles(e.dataTransfer.files);
-        }}
-        onClick={() => fileInputRef.current?.click()}
-        onPaste={(e) => handleFiles(e.clipboardData?.files)}
-        tabIndex={0}
-      >
-        {uploading ? "Uploading…" : "Drop images or GIFs here, or click to choose"}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          style={{ display: "none" }}
-          onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }}
-        />
-      </div>
-      {images.length > 0 && (
-        <div className="gallery-grid">
-          {images.map((img) => (
-            <div key={img.id} className="gallery-thumb">
-              <img src={img.url} alt="" />
-              <button
-                className="gallery-remove"
-                onClick={(e) => { e.stopPropagation(); removeImage(img.id); }}
-                title="Remove image"
-              >
-                ✕
-              </button>
-            </div>
-          ))}
+      )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }}
+      />
+      {lightbox && image && (
+        <div className="lightbox-overlay" onClick={() => setLightbox(false)}>
+          <button className="lightbox-close" onClick={() => setLightbox(false)}>✕</button>
+          <img src={image.url} alt="" onClick={(e) => e.stopPropagation()} />
         </div>
       )}
     </div>

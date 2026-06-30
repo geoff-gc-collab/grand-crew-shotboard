@@ -52,6 +52,22 @@ export async function PATCH(req, { params }) {
     project.autoNumber = body.autoNumber;
   }
 
+  const VALID_COLUMN_TYPES = ["image", "text", "dropdown"];
+  if (body.addColumn && typeof body.addColumn.label === "string" && body.addColumn.label.trim() && VALID_COLUMN_TYPES.includes(body.addColumn.type)) {
+    const key = `c_${newId()}`;
+    const col = { key, label: body.addColumn.label.trim(), type: body.addColumn.type };
+    if (body.addColumn.type === "dropdown" && Array.isArray(body.addColumn.options)) {
+      col.options = body.addColumn.options.map((o) => String(o).trim()).filter(Boolean);
+    }
+    project.customColumns = [...(project.customColumns || []), col];
+    project.columnOrder = [...(project.columnOrder || []), key];
+  }
+
+  if (body.removeColumn && typeof body.removeColumn.key === "string") {
+    project.customColumns = (project.customColumns || []).filter((c) => c.key !== body.removeColumn.key);
+    project.columnOrder = (project.columnOrder || []).filter((k) => k !== body.removeColumn.key);
+  }
+
   if (body.removeDay) {
     const hasScenes = data.scenes.some(
       (s) => s.projectId === id && s.dayId === body.removeDay
