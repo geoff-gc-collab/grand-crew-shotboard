@@ -21,7 +21,7 @@ async function uploadFile(file) {
 }
 
 function columnFlexStyle(col) {
-  if (FIXED_COLUMN_TYPES.includes(col.type)) {
+  if (col.fixed || FIXED_COLUMN_TYPES.includes(col.type)) {
     return { flex: `0 0 ${col.width}px`, width: col.width };
   }
   return { flex: `1 1 ${col.width}px`, minWidth: Math.round(col.width * 0.55) };
@@ -53,6 +53,12 @@ function minutesToLabel(mins) {
 function formatRange(start, end) {
   if (start == null) return "—";
   return end != null && end !== start ? `${minutesToLabel(start)} – ${minutesToLabel(end)}` : minutesToLabel(start);
+}
+
+// The grid cell only shows the start time — duration is right next to it,
+// so the end time is redundant there (full range still appears in Copy summary).
+function formatStart(start) {
+  return start == null ? "—" : minutesToLabel(start);
 }
 
 // Walks a day's rows in order, cascading start times forward: each row's
@@ -771,7 +777,7 @@ function TimingCell({ scene, timing, onField, onPinStart, onClearStart }) {
         onClick={(e) => (menuPos ? setMenuPos(null) : openMenuAt(e))}
         title="Click to pin/clear this row's start time, or right-click anywhere in the cell"
       >
-        {formatRange(timing?.start, timing?.end)}
+        {formatStart(timing?.start)}
       </button>
       <input
         className="timing-duration"
