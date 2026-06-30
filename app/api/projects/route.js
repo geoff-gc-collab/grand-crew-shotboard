@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { readData, writeData, newProjectId, PALETTE } from "@/lib/store";
+import { DEFAULT_COLUMN_ORDER } from "@/lib/columns";
 
 export async function GET() {
   const data = await readData();
@@ -22,6 +23,7 @@ export async function POST(req) {
     id,
     name,
     createdAt: new Date().toISOString(),
+    columnOrder: DEFAULT_COLUMN_ORDER,
     days: [{ id: "day1", label: "Day 1", color: PALETTE[0] }],
   };
   data.projects.push(project);

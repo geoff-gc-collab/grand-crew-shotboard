@@ -13,6 +13,10 @@ const BLANK_SCENE = {
   desc: "",
   photo: "",
   ref: "",
+  images: [],
+  colorTag: null,
+  intExt: "",
+  dayNight: "",
 };
 
 export async function POST(req, { params }) {

@@ -1,13 +1,11 @@
 "use client";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { dayAccentStyle } from "@/lib/color";
+import { COLUMN_DEFS, DEFAULT_COLUMN_ORDER, columnDef } from "@/lib/columns";
 
 const PALETTE = ["#5A8AC0", "#DD8A4D", "#6FAE8C", "#9B7FC7", "#D9714E", "#4FB3B0"];
-
-function isImageUrl(url) {
-  return /\.(jpe?g|png|gif|webp|avif)(\?.*)?$/i.test(url || "");
-}
+const TAG_COLORS = ["#5A8AC0", "#DD8A4D", "#6FAE8C", "#9B7FC7", "#D9714E", "#4FB3B0", "#D9B65A", "#E899B8"];
 
 async function uploadFile(file) {
   const form = new FormData();
@@ -21,7 +19,6 @@ export default function ShotBoard({ initialProject, initialScenes }) {
   const [project, setProject] = useState(initialProject);
   const [scenes, setScenes] = useState(initialScenes);
   const [filter, setFilter] = useState("all");
-  const [openIds, setOpenIds] = useState(new Set());
   const [collapsedDays, setCollapsedDays] = useState(new Set());
   const [swatchOpenFor, setSwatchOpenFor] = useState(null);
   const [status, setStatus] = useState("saved");
@@ -33,19 +30,13 @@ export default function ShotBoard({ initialProject, initialScenes }) {
   const pendingFields = useRef({});
 
   const projectId = project.id;
+  const columnOrder = project.columnOrder && project.columnOrder.length ? project.columnOrder : DEFAULT_COLUMN_ORDER;
+  const visibleColumns = columnOrder.map(columnDef).filter(Boolean);
 
   function showToast(msg) {
     setToast(msg);
     clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setToast(null), 6000);
-  }
-
-  function toggleOpen(id) {
-    setOpenIds((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
   }
 
   function toggleDayCollapsed(dayId) {
@@ -81,34 +72,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
     }
   }
 
-  async function moveScene(scene, dir) {
-    const dayScenes = scenes.filter((s) => s.dayId === scene.dayId).sort((a, b) => a.order - b.order);
-    const idx = dayScenes.findIndex((s) => s.id === scene.id);
-    const swapIdx = idx + dir;
-    if (swapIdx < 0 || swapIdx >= dayScenes.length) return;
-    const a = dayScenes[idx];
-    const b = dayScenes[swapIdx];
-    setScenes((prev) =>
-      prev.map((s) => {
-        if (s.id === a.id) return { ...s, order: b.order };
-        if (s.id === b.id) return { ...s, order: a.order };
-        return s;
-      })
-    );
-    setStatus("saving");
-    try {
-      await fetch(`/api/projects/${projectId}/scenes/${scene.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ moveDir: dir }),
-      });
-      setStatus("saved");
-    } catch (e) {
-      setStatus("error");
-    }
-  }
-
-  // ---- Drag-and-drop reorder ----
+  // ---- Row drag-and-drop reorder ----
   async function reorderDay(dayId, orderedIds) {
     setScenes((prev) => {
       const orderMap = new Map(orderedIds.map((id, i) => [id, i]));
@@ -158,25 +122,6 @@ export default function ShotBoard({ initialProject, initialScenes }) {
     setDragId(null);
   }
 
-  async function changeSceneDay(scene, dayId) {
-    setScenes((prev) => prev.map((s) => (s.id === scene.id ? { ...s, dayId } : s)));
-    setStatus("saving");
-    try {
-      const res = await fetch(`/api/projects/${projectId}/scenes/${scene.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dayId }),
-      });
-      const json = await res.json();
-      if (json.scene) {
-        setScenes((prev) => prev.map((s) => (s.id === scene.id ? json.scene : s)));
-      }
-      setStatus("saved");
-    } catch (e) {
-      setStatus("error");
-    }
-  }
-
   async function addScene(dayId) {
     setStatus("saving");
     try {
@@ -188,7 +133,6 @@ export default function ShotBoard({ initialProject, initialScenes }) {
       const json = await res.json();
       if (json.scene) {
         setScenes((prev) => [...prev, json.scene]);
-        setOpenIds((prev) => new Set(prev).add(json.scene.id));
         setCollapsedDays((prev) => {
           const next = new Set(prev);
           next.delete(dayId);
@@ -234,7 +178,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
     }
   }
 
-  // ---- Project / day edits ----
+  // ---- Project / day / column edits ----
   async function patchProject(body) {
     setStatus("saving");
     try {
@@ -291,6 +235,25 @@ export default function ShotBoard({ initialProject, initialScenes }) {
     await patchProject({ removeDay: dayId });
   }
 
+  function handleColDragStart(e, key) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("application/x-column", key);
+  }
+
+  function handleColDrop(e, targetKey) {
+    e.preventDefault();
+    const draggedKey = e.dataTransfer.getData("application/x-column");
+    if (!draggedKey || draggedKey === targetKey) return;
+    const order = [...columnOrder];
+    const from = order.indexOf(draggedKey);
+    const to = order.indexOf(targetKey);
+    if (from === -1 || to === -1) return;
+    order.splice(from, 1);
+    order.splice(to, 0, draggedKey);
+    setProject((prev) => ({ ...prev, columnOrder: order }));
+    patchProject({ columnOrder: order });
+  }
+
   function copySummary() {
     let text = `${project.name.toUpperCase()} — SHOT BOARD\n\n`;
     project.days.forEach((day) => {
@@ -298,7 +261,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
       text += `${day.label.toUpperCase()}\n${"—".repeat(40)}\n`;
       daySceneList.forEach((s) => {
         text += `[${s.num}] ${s.title}\n`;
-        text += `  Location: ${s.location} · ${s.shotType}\n`;
+        text += `  Location: ${s.location} · ${s.shotType}${s.intExt ? " · " + s.intExt : ""}${s.dayNight ? " · " + s.dayNight : ""}\n`;
         if (s.talent) text += `  Talent: ${s.talent}\n`;
         if (s.extras) text += `  Extras: ${s.extras}\n`;
         if (s.notes) text += `  Notes: ${s.notes}\n`;
@@ -315,7 +278,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
   const visibleDays = project.days.filter((d) => filter === "all" || filter === d.id);
 
   return (
-    <div className="wrap">
+    <div className="wrap wide">
       <Link href="/" className="back-link">&larr; All projects</Link>
 
       <div className="head">
@@ -354,99 +317,124 @@ export default function ShotBoard({ initialProject, initialScenes }) {
         ))}
       </div>
 
-      {visibleDays.map((day) => {
-        const daySceneList = scenes.filter((s) => s.dayId === day.id).sort((a, b) => a.order - b.order);
-        const collapsed = collapsedDays.has(day.id);
-        return (
-          <div key={day.id} className={`day ${collapsed ? "collapsed" : ""}`} style={dayAccentStyle(day.color)}>
-            <div className="day-header" onClick={() => toggleDayCollapsed(day.id)}>
-              <div className="day-header-left">
-                <span className="day-tag">{day.label.split(" ")[0] === "Day" ? day.label.split(" ").slice(0, 2).join(" ") : "Day"}</span>
-                <input
-                  className="day-title"
-                  value={day.label}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => renameDay(day.id, e.target.value)}
-                  onBlur={(e) => renameDayBlur(day.id, e.target.value)}
-                />
-                <span className="day-count">{daySceneList.length} scene{daySceneList.length === 1 ? "" : "s"}</span>
-              </div>
-              <div className="day-controls" onClick={(e) => e.stopPropagation()}>
-                <div style={{ position: "relative" }}>
-                  <button
-                    className="icon-btn"
-                    title="Recolor"
-                    onClick={() => setSwatchOpenFor(swatchOpenFor === day.id ? null : day.id)}
-                  >
-                    ●
-                  </button>
-                  {swatchOpenFor === day.id && (
-                    <div
-                      className="swatch-row"
-                      style={{
-                        position: "absolute", top: 28, right: 0, background: "var(--ink-3)",
-                        border: "1px solid var(--line)", borderRadius: 8, padding: "6px 8px", zIndex: 5,
-                      }}
-                    >
-                      {PALETTE.map((c) => (
-                        <button
-                          key={c}
-                          className={`color-swatch ${day.color === c ? "active" : ""}`}
-                          style={{ background: c }}
-                          onClick={() => recolorDay(day.id, c)}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <button className="icon-btn danger" title="Remove day" onClick={() => removeDay(day.id)}>✕</button>
-                <span className="chev">▾</span>
-              </div>
-            </div>
+      <datalist id="dl-shotType">
+        {columnDef("shotType").options.map((o) => <option key={o} value={o} />)}
+      </datalist>
+      <datalist id="dl-intExt">
+        {columnDef("intExt").options.map((o) => <option key={o} value={o} />)}
+      </datalist>
+      <datalist id="dl-dayNight">
+        {columnDef("dayNight").options.map((o) => <option key={o} value={o} />)}
+      </datalist>
 
+      <div className="grid-wrap">
+        <div className="grid-header-row">
+          <div className="gcell gpin-left" />
+          {visibleColumns.map((col) => (
             <div
-              className="cards"
+              key={col.key}
+              className="gcell gcell-header"
+              style={{ width: col.width }}
+              draggable
+              onDragStart={(e) => handleColDragStart(e, col.key)}
               onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => handleDropOnDayEnd(e, day.id, daySceneList)}
+              onDrop={(e) => handleColDrop(e, col.key)}
+              title="Drag to reorder column"
             >
-              {daySceneList.map((scene) => (
-                <SceneCard
-                  key={scene.id}
-                  scene={scene}
-                  isOpen={openIds.has(scene.id)}
-                  days={project.days}
-                  isDragging={dragId === scene.id}
-                  onToggle={() => toggleOpen(scene.id)}
-                  onField={(field, value) => updateSceneField(scene.id, field, value)}
-                  onMove={(dir) => moveScene(scene, dir)}
-                  onDayChange={(dayId) => changeSceneDay(scene, dayId)}
-                  onDelete={() => deleteScene(scene)}
-                  onDragStart={(e) => handleDragStart(e, scene.id)}
-                  onDragEnd={() => setDragId(null)}
-                  onDropOnCard={(e) => handleDropOnScene(e, scene, day.id, daySceneList)}
-                  canMoveUp={daySceneList.indexOf(scene) > 0}
-                  canMoveDown={daySceneList.indexOf(scene) < daySceneList.length - 1}
-                />
-              ))}
-              {daySceneList.length === 0 && (
-                <div className="empty-state">No scenes yet on this day. Drag a card here.</div>
-              )}
+              {col.label}
             </div>
+          ))}
+          <div className="gcell gpin-right" />
+        </div>
 
-            <div className="add-row">
-              <button className="add-scene-btn" onClick={() => addScene(day.id)}>
-                + Add scene to {day.label}
-              </button>
+        {visibleDays.map((day) => {
+          const daySceneList = scenes.filter((s) => s.dayId === day.id).sort((a, b) => a.order - b.order);
+          const collapsed = collapsedDays.has(day.id);
+          return (
+            <div key={day.id} className={`day ${collapsed ? "collapsed" : ""}`} style={dayAccentStyle(day.color)}>
+              <div className="day-header" onClick={() => toggleDayCollapsed(day.id)}>
+                <div className="day-header-left">
+                  <span className="day-tag">{day.label.split(" ")[0] === "Day" ? day.label.split(" ").slice(0, 2).join(" ") : "Day"}</span>
+                  <input
+                    className="day-title"
+                    value={day.label}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => renameDay(day.id, e.target.value)}
+                    onBlur={(e) => renameDayBlur(day.id, e.target.value)}
+                  />
+                  <span className="day-count">{daySceneList.length} scene{daySceneList.length === 1 ? "" : "s"}</span>
+                </div>
+                <div className="day-controls" onClick={(e) => e.stopPropagation()}>
+                  <div style={{ position: "relative" }}>
+                    <button
+                      className="icon-btn"
+                      title="Recolor"
+                      onClick={() => setSwatchOpenFor(swatchOpenFor === day.id ? null : day.id)}
+                    >
+                      ●
+                    </button>
+                    {swatchOpenFor === day.id && (
+                      <div
+                        className="swatch-row"
+                        style={{
+                          position: "absolute", top: 28, right: 0, background: "var(--ink-3)",
+                          border: "1px solid var(--line)", borderRadius: 8, padding: "6px 8px", zIndex: 5,
+                        }}
+                      >
+                        {PALETTE.map((c) => (
+                          <button
+                            key={c}
+                            className={`color-swatch ${day.color === c ? "active" : ""}`}
+                            style={{ background: c }}
+                            onClick={() => recolorDay(day.id, c)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <button className="icon-btn danger" title="Remove day" onClick={() => removeDay(day.id)}>✕</button>
+                  <span className="chev">▾</span>
+                </div>
+              </div>
+
+              <div
+                className="grows"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => handleDropOnDayEnd(e, day.id, daySceneList)}
+              >
+                {daySceneList.map((scene) => (
+                  <GridRow
+                    key={scene.id}
+                    scene={scene}
+                    columns={visibleColumns}
+                    isDragging={dragId === scene.id}
+                    onField={(field, value) => updateSceneField(scene.id, field, value)}
+                    onDelete={() => deleteScene(scene)}
+                    onDragStart={(e) => handleDragStart(e, scene.id)}
+                    onDragEnd={() => setDragId(null)}
+                    onDropOnCard={(e) => handleDropOnScene(e, scene, day.id, daySceneList)}
+                  />
+                ))}
+                {daySceneList.length === 0 && (
+                  <div className="empty-state">No scenes yet on this day. Drag a row here.</div>
+                )}
+              </div>
+
+              <div className="add-row">
+                <button className="add-scene-btn" onClick={() => addScene(day.id)}>
+                  + Add scene to {day.label}
+                </button>
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
 
       <button className="add-day-btn" onClick={addDay}>+ Add another day</button>
 
       <div className="footer-note">
         Shared with anyone who has access to this tool — edits sync for everyone.<br />
-        Click a scene to expand it. Fields save automatically.
+        Drag the ⠿ handle to reorder rows, drag a column header to reorder columns.
       </div>
 
       <div className={`toast ${toast ? "show" : ""}`}>
@@ -457,12 +445,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
   );
 }
 
-const TAG_COLORS = ["#5A8AC0", "#DD8A4D", "#6FAE8C", "#9B7FC7", "#D9714E", "#4FB3B0", "#D9B65A", "#E899B8"];
-
-function SceneCard({
-  scene, isOpen, days, isDragging, onToggle, onField, onMove, onDayChange, onDelete,
-  onDragStart, onDragEnd, onDropOnCard, canMoveUp, canMoveDown,
-}) {
+function GridRow({ scene, columns, isDragging, onField, onDelete, onDragStart, onDragEnd, onDropOnCard }) {
   const [local, setLocal] = useState(scene);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
 
@@ -476,171 +459,134 @@ function SceneCard({
   }
 
   function setColorTag(color) {
-    const next = { label: local.colorTag?.label || "", color };
-    change("colorTag", next);
+    change("colorTag", { label: local.colorTag?.label || "", color });
   }
-
   function setColorTagLabel(label) {
     if (!local.colorTag) return;
     change("colorTag", { ...local.colorTag, label });
   }
-
   function clearColorTag() {
     setLocal((prev) => ({ ...prev, colorTag: null }));
     onField("colorTag", null);
     setTagPickerOpen(false);
   }
 
+  function renderCell(col) {
+    switch (col.type) {
+      case "textarea":
+        return (
+          <textarea
+            className="gcell-textarea"
+            value={local[col.key] || ""}
+            onChange={(e) => change(col.key, e.target.value)}
+            rows={2}
+          />
+        );
+      case "datalist":
+        return (
+          <input
+            className="gcell-input"
+            list={`dl-${col.key}`}
+            value={local[col.key] || ""}
+            placeholder={col.label}
+            onChange={(e) => change(col.key, e.target.value)}
+          />
+        );
+      case "link":
+        return (
+          <div className="gcell-link-row">
+            <input
+              className="gcell-input"
+              placeholder="https://…"
+              value={local.ref || ""}
+              onChange={(e) => change("ref", e.target.value)}
+            />
+            {local.ref && (
+              <a className="gcell-link-open" href={local.ref} target="_blank" rel="noopener noreferrer">↗</a>
+            )}
+          </div>
+        );
+      case "images":
+        return (
+          <ImageGallery
+            compact
+            images={local.images || []}
+            onChange={(images) => change("images", images)}
+          />
+        );
+      case "colorTag":
+        return (
+          <div className="tag-picker-wrap" style={{ position: "relative" }}>
+            <button
+              className="color-tag-chip"
+              style={local.colorTag ? { background: local.colorTag.color, color: "#0E1116" } : undefined}
+              onClick={() => setTagPickerOpen((v) => !v)}
+              title="Set color tag"
+            >
+              {local.colorTag ? (local.colorTag.label || "Tag") : "+ Tag"}
+            </button>
+            {tagPickerOpen && (
+              <div className="tag-picker">
+                <input
+                  className="tag-label-input"
+                  placeholder="Label, e.g. Neutral"
+                  value={local.colorTag?.label || ""}
+                  onChange={(e) => setColorTagLabel(e.target.value)}
+                />
+                <div className="swatch-row">
+                  {TAG_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      className={`color-swatch ${local.colorTag?.color === c ? "active" : ""}`}
+                      style={{ background: c }}
+                      onClick={() => setColorTag(c)}
+                    />
+                  ))}
+                </div>
+                {local.colorTag && (
+                  <button className="tag-clear" onClick={clearColorTag}>Clear tag</button>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      default:
+        return (
+          <input
+            className="gcell-input"
+            value={local[col.key] || ""}
+            placeholder={col.key === "title" ? "Untitled scene" : ""}
+            onChange={(e) => change(col.key, e.target.value)}
+          />
+        );
+    }
+  }
+
   return (
     <div
-      className={`card ${isDragging ? "dragging" : ""}`}
+      className={`grow ${isDragging ? "dragging" : ""}`}
+      style={{ borderLeftColor: local.colorTag?.color || "transparent" }}
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDropOnCard}
     >
-      <div className="card-row" onClick={(e) => {
-        if (e.target.closest(".card-title") || e.target.closest(".card-controls") || e.target.closest(".tag-picker-wrap")) return;
-        onToggle();
-      }}>
-        <span
-          className="drag-handle"
-          draggable
-          onDragStart={onDragStart}
-          onDragEnd={onDragEnd}
-          onClick={(e) => e.stopPropagation()}
-          title="Drag to reorder"
-        >
+      <div className="gcell gpin-left">
+        <span className="drag-handle" draggable onDragStart={onDragStart} onDragEnd={onDragEnd} title="Drag to reorder">
           ⠿
         </span>
-        <span className={`scene-tag ${local.num === "—" ? "empty" : ""}`}>{local.num}</span>
-        <div className="card-title">
-          <input
-            value={local.title}
-            placeholder="Untitled scene"
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => change("title", e.target.value)}
-          />
-        </div>
-        <div className="tag-picker-wrap" style={{ position: "relative" }}>
-          <button
-            className="color-tag-chip"
-            style={local.colorTag ? { background: local.colorTag.color, color: "#0E1116" } : undefined}
-            onClick={(e) => { e.stopPropagation(); setTagPickerOpen((v) => !v); }}
-            title="Set color tag"
-          >
-            {local.colorTag ? (local.colorTag.label || "Tag") : "+ Tag"}
-          </button>
-          {tagPickerOpen && (
-            <div className="tag-picker" onClick={(e) => e.stopPropagation()}>
-              <input
-                className="tag-label-input"
-                placeholder="Label, e.g. Neutral"
-                value={local.colorTag?.label || ""}
-                onChange={(e) => setColorTagLabel(e.target.value)}
-              />
-              <div className="swatch-row">
-                {TAG_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    className={`color-swatch ${local.colorTag?.color === c ? "active" : ""}`}
-                    style={{ background: c }}
-                    onClick={() => setColorTag(c)}
-                  />
-                ))}
-              </div>
-              {local.colorTag && (
-                <button className="tag-clear" onClick={clearColorTag}>Clear tag</button>
-              )}
-            </div>
-          )}
-        </div>
-        <div className="card-meta">
-          {local.location && <span className="pill">{truncate(local.location, 22)}</span>}
-          {local.shotType && <span className="pill">{local.shotType}</span>}
-        </div>
-        <div className="card-controls">
-          <button className="icon-btn" disabled={!canMoveUp} onClick={() => onMove(-1)} title="Move up">↑</button>
-          <button className="icon-btn" disabled={!canMoveDown} onClick={() => onMove(1)} title="Move down">↓</button>
-          <button className="icon-btn danger" onClick={onDelete} title="Remove scene">✕</button>
-        </div>
       </div>
-
-      {isOpen && (
-        <div className="card-body">
-          <div className="grid2">
-            <div className="field">
-              <label>Scene #</label>
-              <input value={local.num} onChange={(e) => change("num", e.target.value)} />
-            </div>
-            <div className="field">
-              <label>Shot type</label>
-              <input value={local.shotType} onChange={(e) => change("shotType", e.target.value)} />
-            </div>
-            <div className="field full">
-              <label>Location</label>
-              <input value={local.location} onChange={(e) => change("location", e.target.value)} />
-            </div>
-            {days.length > 1 && (
-              <div className="field full">
-                <label>Day</label>
-                <select value={scene.dayId} onChange={(e) => onDayChange(e.target.value)}>
-                  {days.map((d) => (
-                    <option key={d.id} value={d.id}>{d.label}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-            <div className="field">
-              <label>Talent</label>
-              <input value={local.talent} onChange={(e) => change("talent", e.target.value)} />
-            </div>
-            <div className="field">
-              <label>Extras</label>
-              <input value={local.extras} onChange={(e) => change("extras", e.target.value)} />
-            </div>
-            <div className="field">
-              <label>Wardrobe</label>
-              <input value={local.wardrobe} onChange={(e) => change("wardrobe", e.target.value)} />
-            </div>
-            <div className="field">
-              <label>Notes</label>
-              <input value={local.notes} onChange={(e) => change("notes", e.target.value)} />
-            </div>
-            <div className="field full">
-              <label>Shot description</label>
-              <textarea value={local.desc} onChange={(e) => change("desc", e.target.value)} />
-            </div>
-            <div className="field full">
-              <label>Reference images</label>
-              <ImageGallery
-                images={local.images || []}
-                onChange={(images) => change("images", images)}
-              />
-            </div>
-            <div className="field">
-              <label>Shot reference (link)</label>
-              <div className="ref-row">
-                <input
-                  placeholder="https://…"
-                  value={local.ref}
-                  onChange={(e) => change("ref", e.target.value)}
-                />
-                {local.ref && (
-                  <a className="ref-link" href={local.ref} target="_blank" rel="noopener noreferrer">open ↗</a>
-                )}
-              </div>
-            </div>
-          </div>
+      {columns.map((col) => (
+        <div key={col.key} className={`gcell gcell-${col.type}`} style={{ width: col.width }}>
+          {renderCell(col)}
         </div>
-      )}
+      ))}
+      <div className="gcell gpin-right">
+        <button className="icon-btn danger" onClick={onDelete} title="Remove scene">✕</button>
+      </div>
     </div>
   );
 }
 
-function truncate(str, n) {
-  return str.length > n ? str.slice(0, n - 1) + "…" : str;
-}
-
-function ImageGallery({ images, onChange }) {
+function ImageGallery({ images, onChange, compact }) {
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
@@ -661,6 +607,44 @@ function ImageGallery({ images, onChange }) {
 
   function removeImage(id) {
     onChange(images.filter((img) => img.id !== id));
+  }
+
+  if (compact) {
+    return (
+      <div
+        className={`gallery-compact ${dragOver ? "over" : ""}`}
+        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setDragOver(false);
+          handleFiles(e.dataTransfer.files);
+        }}
+      >
+        {images.map((img) => (
+          <div key={img.id} className="gallery-compact-thumb">
+            <img src={img.url} alt="" />
+            <button className="gallery-remove" onClick={() => removeImage(img.id)} title="Remove image">✕</button>
+          </div>
+        ))}
+        <button
+          className="gallery-compact-add"
+          onClick={() => fileInputRef.current?.click()}
+          title="Add image or GIF"
+        >
+          {uploading ? "…" : "+"}
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: "none" }}
+          onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }}
+        />
+      </div>
+    );
   }
 
   return (

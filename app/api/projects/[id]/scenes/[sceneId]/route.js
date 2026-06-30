@@ -4,6 +4,7 @@ import { readData, writeData } from "@/lib/store";
 const EDITABLE_FIELDS = [
   "num", "title", "location", "shotType", "talent",
   "extras", "wardrobe", "notes", "desc", "photo", "ref",
+  "intExt", "dayNight",
 ];
 
 // body: { field-updates... } and/or { moveDir: -1 | 1 } and/or { dayId: 'newDay' }

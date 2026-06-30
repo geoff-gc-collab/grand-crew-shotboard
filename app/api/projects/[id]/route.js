@@ -44,6 +44,10 @@ export async function PATCH(req, { params }) {
     if (day) day.color = body.recolorDay.color;
   }
 
+  if (Array.isArray(body.columnOrder) && body.columnOrder.every((k) => typeof k === "string")) {
+    project.columnOrder = body.columnOrder;
+  }
+
   if (body.removeDay) {
     const hasScenes = data.scenes.some(
       (s) => s.projectId === id && s.dayId === body.removeDay
