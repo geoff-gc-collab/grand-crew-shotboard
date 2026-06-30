@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { withData, newId } from "@/lib/store";
+import { withData, newId, mkMarker } from "@/lib/store";
 
 const BLANK_SCENE = {
+  kind: "shot",
   num: "—",
   title: "",
   location: "",
@@ -19,6 +20,8 @@ const BLANK_SCENE = {
   dayNight: "",
   dayNightIntExt: "",
   timing: "",
+  timeAnchor: "",
+  timeDuration: 20,
   customFields: {},
 };
 
@@ -47,6 +50,8 @@ export async function POST(req, { params }) {
     if (body.restore) {
       // Recreate a previously-deleted scene (used by client-side undo).
       scene = { ...body.restore, projectId: id, dayId, order };
+    } else if (body.kind === "marker") {
+      scene = { ...mkMarker(id, dayId, order) };
     } else {
       scene = {
         id: newId(),

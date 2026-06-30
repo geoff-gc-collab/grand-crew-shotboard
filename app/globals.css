@@ -198,13 +198,32 @@ a.back-link:hover{color:var(--paper);}
 }
 .gallery-remove:hover{background:var(--warn);}
 
-.add-row{display:flex;justify-content:center;margin-top:8px;}
-.add-scene-btn{
+.add-row{display:flex;justify-content:center;gap:8px;margin-top:8px;flex-wrap:wrap;}
+.add-scene-btn, .add-marker-btn{
   font-family:var(--mono);font-size:11px;letter-spacing:0.06em;text-transform:uppercase;
   color:var(--paper-faint);background:transparent;border:1px dashed var(--line);border-radius:7px;
-  padding:9px 16px;width:100%;cursor:pointer;transition:all .15s;
+  padding:9px 16px;flex:1;cursor:pointer;transition:all .15s;min-width:200px;
 }
-.add-scene-btn:hover{color:var(--paper);border-color:var(--paper-faint);background:var(--ink-2);}
+.add-scene-btn:hover, .add-marker-btn:hover{color:var(--paper);border-color:var(--paper-faint);background:var(--ink-2);}
+
+.marker-row{
+  display:flex;align-items:center;gap:10px;padding:8px 14px;border-radius:8px;margin:6px 0;
+  background:color-mix(in srgb, var(--marker-color) 16%, var(--ink-2));
+  border:1px solid color-mix(in srgb, var(--marker-color) 40%, var(--line));
+  border-left:4px solid var(--marker-color);transition:opacity .15s;
+}
+.marker-row.dragging{opacity:0.35;}
+.marker-type-select{
+  background:var(--ink-3);border:1px solid var(--line);border-radius:6px;color:var(--paper);
+  font-family:var(--mono);font-size:10.5px;letter-spacing:0.04em;text-transform:uppercase;
+  padding:5px 7px;outline:none;flex-shrink:0;
+}
+.marker-label-input{
+  flex:1;background:transparent;border:none;color:var(--paper);font-family:var(--sans);
+  font-size:14px;font-weight:600;padding:4px 6px;outline:none;min-width:0;
+}
+.marker-row .timing-cell{flex-shrink:0;width:auto;}
+.marker-row .timing-range{font-weight:600;}
 
 .add-day-btn{
   font-family:var(--mono);font-size:11px;letter-spacing:0.06em;text-transform:uppercase;
@@ -264,13 +283,22 @@ a.back-link:hover{color:var(--paper);}
   font-family:var(--sans);font-size:12px;padding:6px 8px;outline:none;
 }
 
-.timing-cell{position:relative;display:flex;align-items:center;gap:2px;width:100%;}
-.timing-cell .gcell-input{flex:1;}
-.timing-menu-btn{
-  width:18px;height:18px;border-radius:4px;border:none;background:transparent;color:var(--paper-faint);
-  cursor:pointer;font-size:12px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+.grow .gcell.gcell-timing{overflow:visible;}
+.timing-cell{position:relative;display:flex;align-items:center;gap:3px;width:100%;flex-wrap:wrap;overflow:visible;}
+.timing-pin{font-size:10px;flex-shrink:0;}
+.timing-range{
+  font-family:var(--sans);font-size:12px;color:var(--paper);background:transparent;border:none;
+  cursor:pointer;padding:3px 4px;border-radius:5px;text-align:left;white-space:nowrap;
 }
-.timing-menu-btn:hover{background:var(--ink-3);color:var(--paper);}
+.timing-range:hover{background:var(--ink-3);}
+.timing-duration{
+  width:30px;background:transparent;border:1px solid transparent;border-radius:5px;color:var(--paper-dim);
+  font-family:var(--mono);font-size:11px;padding:2px 3px;outline:none;text-align:right;flex-shrink:0;
+  -moz-appearance:textfield;
+}
+.timing-duration::-webkit-outer-spin-button, .timing-duration::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+.timing-duration:hover, .timing-duration:focus{background:var(--ink-3);border-color:var(--paper-faint);}
+.timing-duration-suffix{font-family:var(--mono);font-size:10px;color:var(--paper-faint);flex-shrink:0;}
 .timing-menu{
   position:absolute;top:26px;left:0;z-index:7;background:var(--ink-3);border:1px solid var(--line);
   border-radius:7px;padding:4px;min-width:200px;box-shadow:0 8px 24px rgba(0,0,0,0.4);
@@ -356,7 +384,7 @@ a.back-link:hover{color:var(--paper);}
   body{background:#fff;}
   .back-link, .head-actions, .filters, .tag-legend, .day-controls .icon-btn, .add-row, .add-day-btn,
   .footer-note, .toast, .gpin-right, .drag-handle, .image-slot-actions, .col-remove, .col-form,
-  .lightbox-overlay, .chev, .timing-menu-btn, .timing-menu{
+  .lightbox-overlay, .chev, .timing-menu, .timing-pin{
     display:none !important;
   }
   .wrap.wide{max-width:none;padding:0;margin:0;}

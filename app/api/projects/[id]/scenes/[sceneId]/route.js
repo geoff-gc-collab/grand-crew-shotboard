@@ -5,7 +5,9 @@ const EDITABLE_FIELDS = [
   "num", "title", "location", "shotType", "talent",
   "extras", "wardrobe", "notes", "desc", "photo", "ref",
   "intExt", "dayNight", "dayNightIntExt", "timing",
+  "timeAnchor", "label",
 ];
+const MARKER_TYPES = ["call", "meal", "move", "note"];
 
 // body: { field-updates... } and/or { moveDir: -1 | 1 } and/or { dayId: 'newDay' }
 export async function PATCH(req, { params }) {
@@ -40,6 +42,14 @@ export async function PATCH(req, { params }) {
 
     if (body.customFields && typeof body.customFields === "object") {
       scene.customFields = { ...(scene.customFields || {}), ...body.customFields };
+    }
+
+    if (typeof body.timeDuration === "number" && Number.isFinite(body.timeDuration)) {
+      scene.timeDuration = Math.max(0, Math.round(body.timeDuration));
+    }
+
+    if (typeof body.markerType === "string" && MARKER_TYPES.includes(body.markerType)) {
+      scene.markerType = body.markerType;
     }
 
     if (body.dayId && body.dayId !== scene.dayId) {

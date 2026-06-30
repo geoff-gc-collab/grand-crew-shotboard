@@ -50,11 +50,40 @@ function minutesToLabel(mins) {
   return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
-function lastTimeInRange(label) {
-  if (!label) return null;
-  const parts = label.split(/[–-]/);
-  return timeToMinutes(parts[parts.length - 1]);
+function formatRange(start, end) {
+  if (start == null) return "—";
+  return end != null && end !== start ? `${minutesToLabel(start)} – ${minutesToLabel(end)}` : minutesToLabel(start);
 }
+
+// Walks a day's rows in order, cascading start times forward: each row's
+// start = previous row's end, unless the row has a pinned timeAnchor, which
+// resets the cascade from that point. A row's own timeDuration (default 20)
+// determines its end, and therefore the next row's start — so editing any
+// row's duration (or pinning a new start) live-recalculates everything after
+// it on the next render, without a one-shot bulk-fill action.
+function computeTimingForDay(daySceneList) {
+  let cursor = null;
+  const map = new Map();
+  daySceneList.forEach((s) => {
+    if (s.timeAnchor) {
+      const t = timeToMinutes(s.timeAnchor);
+      if (t != null) cursor = t;
+    }
+    const start = cursor;
+    const duration = typeof s.timeDuration === "number" ? s.timeDuration : 20;
+    const end = start != null ? start + duration : null;
+    map.set(s.id, { start, end });
+    if (end != null) cursor = end;
+  });
+  return map;
+}
+
+const MARKER_TYPE_META = {
+  call: { label: "Crew Call", color: "#5A8AC0" },
+  meal: { label: "Meal", color: "#6FAE8C" },
+  move: { label: "Location Move", color: "#DD8A4D" },
+  note: { label: "Note", color: "#8B9099" },
+};
 
 export default function ShotBoard({ initialProject, initialScenes }) {
   const [project, setProject] = useState(initialProject);
@@ -198,6 +227,8 @@ export default function ShotBoard({ initialProject, initialScenes }) {
     setDragId(null);
   }
 
+  // New rows have no pinned anchor, so they automatically continue the
+  // day's cascade from wherever the previous row left off — no manual fill needed.
   async function addScene(dayId) {
     setStatus("saving");
     try {
@@ -208,15 +239,6 @@ export default function ShotBoard({ initialProject, initialScenes }) {
       });
       const json = await res.json();
       if (json.scene) {
-        // Default new scenes to a 20-minute continuation of the day's last timing slot.
-        const daySceneList = scenes.filter((s) => s.dayId === dayId).sort((a, b) => a.order - b.order);
-        const last = daySceneList[daySceneList.length - 1];
-        const lastEnd = last ? lastTimeInRange(last.timing) : null;
-        if (lastEnd != null) {
-          const label = `${minutesToLabel(lastEnd)} – ${minutesToLabel(lastEnd + 20)}`;
-          json.scene.timing = label;
-          updateSceneField(json.scene.id, "timing", label, false);
-        }
         setScenes((prev) => [...prev, json.scene]);
         setCollapsedDays((prev) => {
           const next = new Set(prev);
@@ -230,23 +252,47 @@ export default function ShotBoard({ initialProject, initialScenes }) {
     }
   }
 
-  async function autoFillTiming(dayId, fromSceneId, daySceneList) {
-    const fromIdx = daySceneList.findIndex((s) => s.id === fromSceneId);
-    if (fromIdx === -1) return;
-    const guessStart = timeToMinutes(daySceneList[fromIdx].timing) ?? lastTimeInRange(daySceneList[fromIdx - 1]?.timing) ?? 9 * 60;
-    const input = window.prompt("Start time for this shot (e.g. 9:00 AM):", minutesToLabel(guessStart));
+  async function addMarker(dayId) {
+    setStatus("saving");
+    try {
+      const res = await fetch(`/api/projects/${projectId}/scenes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dayId, kind: "marker" }),
+      });
+      const json = await res.json();
+      if (json.scene) {
+        setScenes((prev) => [...prev, json.scene]);
+        setCollapsedDays((prev) => {
+          const next = new Set(prev);
+          next.delete(dayId);
+          return next;
+        });
+      }
+      setStatus("saved");
+    } catch (e) {
+      setStatus("error");
+    }
+  }
+
+  function pinStartTime(scene, timingInfo) {
+    const guess = timingInfo?.start != null ? minutesToLabel(timingInfo.start) : "9:00 AM";
+    const input = window.prompt("Start time for this row (e.g. 9:00 AM):", guess);
     if (input === null) return;
-    const start0 = timeToMinutes(input);
-    if (start0 == null) {
+    if (input.trim() === "") {
+      updateSceneField(scene.id, "timeAnchor", "", false);
+      return;
+    }
+    const mins = timeToMinutes(input);
+    if (mins == null) {
       showToast("Couldn't read that time — try e.g. 9:00 AM");
       return;
     }
-    let start = start0;
-    for (let i = fromIdx; i < daySceneList.length; i++) {
-      const end = start + 20;
-      updateSceneField(daySceneList[i].id, "timing", `${minutesToLabel(start)} – ${minutesToLabel(end)}`, false);
-      start = end;
-    }
+    updateSceneField(scene.id, "timeAnchor", minutesToLabel(mins), false);
+  }
+
+  function clearStartTime(scene) {
+    updateSceneField(scene.id, "timeAnchor", "", false);
   }
 
   async function deleteScene(scene) {
@@ -386,9 +432,17 @@ export default function ShotBoard({ initialProject, initialScenes }) {
     let text = `${project.name.toUpperCase()} — SHOT BOARD\n\n`;
     project.days.forEach((day) => {
       const daySceneList = scenes.filter((s) => s.dayId === day.id).sort((a, b) => a.order - b.order);
+      const timingMap = computeTimingForDay(daySceneList);
       text += `${day.label.toUpperCase()}\n${"—".repeat(40)}\n`;
       daySceneList.forEach((s) => {
-        text += `[${s.num}]${s.timing ? " " + s.timing : ""} ${s.title}\n`;
+        const t = timingMap.get(s.id);
+        const timeLabel = t ? formatRange(t.start, t.end) : "";
+        if (s.kind === "marker") {
+          const meta = MARKER_TYPE_META[s.markerType] || MARKER_TYPE_META.note;
+          text += `\n— ${timeLabel !== "—" ? timeLabel + " " : ""}${meta.label.toUpperCase()}${s.label ? ": " + s.label : ""} —\n\n`;
+          return;
+        }
+        text += `[${s.num}]${timeLabel !== "—" ? " " + timeLabel : ""} ${s.title}\n`;
         text += `  Location: ${s.location} · ${s.shotType}${s.dayNightIntExt ? " · " + s.dayNightIntExt : ""}\n`;
         if (s.talent) text += `  Talent: ${s.talent}\n`;
         if (s.extras) text += `  Extras: ${s.extras}\n`;
@@ -552,6 +606,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
 
         {visibleDays.map((day) => {
           const daySceneList = scenes.filter((s) => s.dayId === day.id).sort((a, b) => a.order - b.order);
+          const timingMap = computeTimingForDay(daySceneList);
           const collapsed = collapsedDays.has(day.id);
           return (
             <div key={day.id} className={`day ${collapsed ? "collapsed" : ""}`} style={dayAccentStyle(day.color)}>
@@ -606,20 +661,38 @@ export default function ShotBoard({ initialProject, initialScenes }) {
                 onDrop={(e) => handleDropOnDayEnd(e, day.id, daySceneList)}
               >
                 {daySceneList.map((scene) => (
-                  <GridRow
-                    key={scene.id}
-                    scene={scene}
-                    columns={visibleColumns}
-                    isDragging={dragId === scene.id}
-                    autoNumber={project.autoNumber ? autoNumberMap.get(scene.id) : null}
-                    onField={(field, value) => updateSceneField(scene.id, field, value, false)}
-                    onCustomField={(key, value) => updateSceneField(scene.id, key, value, true)}
-                    onAutoFillTiming={() => autoFillTiming(day.id, scene.id, daySceneList)}
-                    onDelete={() => deleteScene(scene)}
-                    onDragStart={(e) => handleDragStart(e, scene.id)}
-                    onDragEnd={() => setDragId(null)}
-                    onDropOnCard={(e) => handleRowDrop(e, scene, day.id, daySceneList)}
-                  />
+                  scene.kind === "marker" ? (
+                    <MarkerRow
+                      key={scene.id}
+                      scene={scene}
+                      timing={timingMap.get(scene.id)}
+                      isDragging={dragId === scene.id}
+                      onField={(field, value) => updateSceneField(scene.id, field, value, false)}
+                      onPinStart={() => pinStartTime(scene, timingMap.get(scene.id))}
+                      onClearStart={() => clearStartTime(scene)}
+                      onDelete={() => deleteScene(scene)}
+                      onDragStart={(e) => handleDragStart(e, scene.id)}
+                      onDragEnd={() => setDragId(null)}
+                      onDropOnCard={(e) => handleRowDrop(e, scene, day.id, daySceneList)}
+                    />
+                  ) : (
+                    <GridRow
+                      key={scene.id}
+                      scene={scene}
+                      columns={visibleColumns}
+                      isDragging={dragId === scene.id}
+                      autoNumber={project.autoNumber ? autoNumberMap.get(scene.id) : null}
+                      timing={timingMap.get(scene.id)}
+                      onField={(field, value) => updateSceneField(scene.id, field, value, false)}
+                      onCustomField={(key, value) => updateSceneField(scene.id, key, value, true)}
+                      onPinStart={() => pinStartTime(scene, timingMap.get(scene.id))}
+                      onClearStart={() => clearStartTime(scene)}
+                      onDelete={() => deleteScene(scene)}
+                      onDragStart={(e) => handleDragStart(e, scene.id)}
+                      onDragEnd={() => setDragId(null)}
+                      onDropOnCard={(e) => handleRowDrop(e, scene, day.id, daySceneList)}
+                    />
+                  )
                 ))}
                 {daySceneList.length === 0 && (
                   <div className="empty-state">No scenes yet on this day. Drag a row here.</div>
@@ -629,6 +702,9 @@ export default function ShotBoard({ initialProject, initialScenes }) {
               <div className="add-row">
                 <button className="add-scene-btn" onClick={() => addScene(day.id)}>
                   + Add scene to {day.label}
+                </button>
+                <button className="add-marker-btn" onClick={() => addMarker(day.id)}>
+                  + Add production row (call, meal, move…)
                 </button>
               </div>
             </div>
@@ -641,6 +717,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
       <div className="footer-note">
         Shared with anyone who has access to this tool — edits sync for everyone.<br />
         Drag the ⠿ handle to reorder rows, drag a column header to reorder columns, drag a color swatch onto a row to tag it.
+        Pin a start time on any row to reset the schedule from there — everything after it recalculates automatically.
       </div>
 
       <div className={`toast ${toast ? "show" : ""}`}>
@@ -655,9 +732,50 @@ export default function ShotBoard({ initialProject, initialScenes }) {
 // its `scenes` array synchronously on every edit), so every row always shows
 // current data even when another row's action changes it (auto-fill timing,
 // drag-and-drop color tags, etc.) — no local mirror to go stale.
-function GridRow({ scene, columns, isDragging, autoNumber, onField, onCustomField, onAutoFillTiming, onDelete, onDragStart, onDragEnd, onDropOnCard }) {
-  const [timingMenuOpen, setTimingMenuOpen] = useState(false);
+// Shared by GridRow and MarkerRow: shows the computed start–end (cascaded
+// from prior rows), an editable duration in minutes, and pin/clear controls
+// for anchoring this row's start time and breaking the cascade from here.
+function TimingCell({ scene, timing, onField, onPinStart, onClearStart }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const pinned = !!scene.timeAnchor;
 
+  return (
+    <div className="timing-cell" onContextMenu={(e) => { e.preventDefault(); setMenuOpen(true); }}>
+      {pinned && <span className="timing-pin" title={`Pinned to ${scene.timeAnchor}`}>📍</span>}
+      <button
+        className="timing-range"
+        onClick={() => setMenuOpen((v) => !v)}
+        title="Click to pin/clear this row's start time, or right-click anywhere in the cell"
+      >
+        {formatRange(timing?.start, timing?.end)}
+      </button>
+      <input
+        className="timing-duration"
+        type="number"
+        min={0}
+        step={5}
+        value={typeof scene.timeDuration === "number" ? scene.timeDuration : 20}
+        title="Duration in minutes — changing it reflows every row after this one"
+        onChange={(e) => onField("timeDuration", Math.max(0, parseInt(e.target.value, 10) || 0))}
+      />
+      <span className="timing-duration-suffix">m</span>
+      {menuOpen && (
+        <div className="timing-menu" onMouseLeave={() => setMenuOpen(false)}>
+          <button onClick={() => { setMenuOpen(false); onPinStart(); }}>
+            {pinned ? "Edit pinned start time…" : "Pin start time here…"}
+          </button>
+          {pinned && (
+            <button onClick={() => { setMenuOpen(false); onClearStart(); }}>
+              Clear pin (rejoin cascade)
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GridRow({ scene, columns, isDragging, autoNumber, timing, onField, onCustomField, onPinStart, onClearStart, onDelete, onDragStart, onDragEnd, onDropOnCard }) {
   function renderCell(col) {
     switch (col.type) {
       case "textarea": {
@@ -686,28 +804,7 @@ function GridRow({ scene, columns, isDragging, autoNumber, onField, onCustomFiel
       }
       case "timing":
         return (
-          <div className="timing-cell" onContextMenu={(e) => { e.preventDefault(); setTimingMenuOpen(true); }}>
-            <input
-              className="gcell-input"
-              value={scene.timing || ""}
-              placeholder="—"
-              onChange={(e) => onField("timing", e.target.value)}
-            />
-            <button
-              className="timing-menu-btn"
-              onClick={() => setTimingMenuOpen((v) => !v)}
-              title="Timing options (or right-click the cell)"
-            >
-              ⋯
-            </button>
-            {timingMenuOpen && (
-              <div className="timing-menu" onMouseLeave={() => setTimingMenuOpen(false)}>
-                <button onClick={() => { setTimingMenuOpen(false); onAutoFillTiming(); }}>
-                  Auto-fill 20 min from here…
-                </button>
-              </div>
-            )}
-          </div>
+          <TimingCell scene={scene} timing={timing} onField={onField} onPinStart={onPinStart} onClearStart={onClearStart} />
         );
       case "image": {
         const isCustom = !!col.custom;
@@ -760,6 +857,41 @@ function GridRow({ scene, columns, isDragging, autoNumber, onField, onCustomFiel
       <div className="gcell gpin-right">
         <button className="icon-btn danger" onClick={onDelete} title="Remove scene">✕</button>
       </div>
+    </div>
+  );
+}
+
+// Full-width production banner (crew call, meals, location moves, notes) —
+// a quick-read line for the whole crew, distinct from the per-shot grid rows.
+function MarkerRow({ scene, timing, isDragging, onField, onPinStart, onClearStart, onDelete, onDragStart, onDragEnd, onDropOnCard }) {
+  const meta = MARKER_TYPE_META[scene.markerType] || MARKER_TYPE_META.note;
+  return (
+    <div
+      className={`marker-row ${isDragging ? "dragging" : ""}`}
+      style={{ "--marker-color": meta.color }}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={onDropOnCard}
+    >
+      <span className="drag-handle" draggable onDragStart={onDragStart} onDragEnd={onDragEnd} title="Drag to reorder">
+        ⠿
+      </span>
+      <select
+        className="marker-type-select"
+        value={scene.markerType}
+        onChange={(e) => onField("markerType", e.target.value)}
+      >
+        {Object.entries(MARKER_TYPE_META).map(([key, m]) => (
+          <option key={key} value={key}>{m.label}</option>
+        ))}
+      </select>
+      <TimingCell scene={scene} timing={timing} onField={onField} onPinStart={onPinStart} onClearStart={onClearStart} />
+      <input
+        className="marker-label-input"
+        value={scene.label || ""}
+        placeholder={`${meta.label}…`}
+        onChange={(e) => onField("label", e.target.value)}
+      />
+      <button className="icon-btn danger" onClick={onDelete} title="Remove row">✕</button>
     </div>
   );
 }
