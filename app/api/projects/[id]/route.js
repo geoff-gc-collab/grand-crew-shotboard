@@ -48,6 +48,10 @@ export async function PATCH(req, { params }) {
     project.columnOrder = body.columnOrder;
   }
 
+  if (typeof body.autoNumber === "boolean") {
+    project.autoNumber = body.autoNumber;
+  }
+
   if (body.removeDay) {
     const hasScenes = data.scenes.some(
       (s) => s.projectId === id && s.dayId === body.removeDay

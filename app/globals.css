@@ -258,6 +258,9 @@ a.back-link:hover{color:var(--paper);}
 }
 .gcell-input:hover{background:var(--ink-3);}
 .gcell-input:focus{border-color:var(--paper-faint);background:var(--ink-3);}
+.gcell-readonly{
+  width:100%;font-family:var(--mono);font-size:12.5px;color:var(--paper-dim);padding:5px 6px;
+}
 .gcell-textarea{
   width:100%;background:transparent;border:1px solid transparent;border-radius:5px;color:var(--paper);
   font-family:var(--sans);font-size:12px;padding:5px 6px;outline:none;resize:vertical;line-height:1.4;

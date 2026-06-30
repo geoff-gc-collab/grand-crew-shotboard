@@ -225,6 +225,12 @@ export default function ShotBoard({ initialProject, initialScenes }) {
     await patchProject({ addDay: `Day ${project.days.length + 1}` });
   }
 
+  function toggleAutoNumber() {
+    const next = !project.autoNumber;
+    setProject((prev) => ({ ...prev, autoNumber: next }));
+    patchProject({ autoNumber: next });
+  }
+
   async function removeDay(dayId) {
     const hasScenes = scenes.some((s) => s.dayId === dayId);
     if (hasScenes) {
@@ -277,6 +283,17 @@ export default function ShotBoard({ initialProject, initialScenes }) {
 
   const visibleDays = project.days.filter((d) => filter === "all" || filter === d.id);
 
+  const autoNumberMap = new Map();
+  if (project.autoNumber) {
+    let n = 1;
+    project.days.forEach((day) => {
+      scenes
+        .filter((s) => s.dayId === day.id)
+        .sort((a, b) => a.order - b.order)
+        .forEach((s) => autoNumberMap.set(s.id, n++));
+    });
+  }
+
   return (
     <div className="wrap wide">
       <Link href="/" className="back-link">&larr; All projects</Link>
@@ -302,6 +319,13 @@ export default function ShotBoard({ initialProject, initialScenes }) {
             <span className={`dot ${status}`} />
             <span>{status === "saving" ? "Saving…" : status === "error" ? "Save failed" : "Saved"}</span>
           </div>
+          <button
+            className={`btn small ${project.autoNumber ? "primary" : ""}`}
+            onClick={() => toggleAutoNumber()}
+            title="Auto-number renumbers scenes by row position. Off lets you set scene numbers manually (e.g. matching a script's non-sequential numbering)."
+          >
+            Auto #: {project.autoNumber ? "On" : "Off"}
+          </button>
           <button className="btn small" onClick={copySummary}>Copy summary</button>
           <button className="btn small" onClick={() => window.print()}>Print</button>
         </div>
@@ -409,6 +433,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
                     scene={scene}
                     columns={visibleColumns}
                     isDragging={dragId === scene.id}
+                    autoNumber={project.autoNumber ? autoNumberMap.get(scene.id) : null}
                     onField={(field, value) => updateSceneField(scene.id, field, value)}
                     onDelete={() => deleteScene(scene)}
                     onDragStart={(e) => handleDragStart(e, scene.id)}
@@ -446,7 +471,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
   );
 }
 
-function GridRow({ scene, columns, isDragging, onField, onDelete, onDragStart, onDragEnd, onDropOnCard }) {
+function GridRow({ scene, columns, isDragging, autoNumber, onField, onDelete, onDragStart, onDragEnd, onDropOnCard }) {
   const [local, setLocal] = useState(scene);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
 
@@ -552,6 +577,9 @@ function GridRow({ scene, columns, isDragging, onField, onDelete, onDragStart, o
           </div>
         );
       default:
+        if (col.key === "num" && autoNumber != null) {
+          return <div className="gcell-readonly" title="Auto-numbered by row position">{autoNumber}</div>;
+        }
         return (
           <input
             className="gcell-input"
