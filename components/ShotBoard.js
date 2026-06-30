@@ -391,6 +391,18 @@ export default function ShotBoard({ initialProject, initialScenes }) {
     await patchProject({ removeDay: dayId });
   }
 
+  // Every pinned row breaks the cascade at that point — pin too many and
+  // duration edits stop propagating. This resets a day back to one cascade.
+  function clearAllPins(dayId, daySceneList) {
+    const pinned = daySceneList.filter((s) => s.timeAnchor);
+    if (!pinned.length) {
+      showToast("No pinned times on this day");
+      return;
+    }
+    if (!confirm(`Clear ${pinned.length} pinned start time${pinned.length === 1 ? "" : "s"} on this day? The schedule will cascade from the first row only.`)) return;
+    pinned.forEach((s) => updateSceneField(s.id, "timeAnchor", "", false));
+  }
+
   function handleColDragStart(e, key) {
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("application/x-column", key);
@@ -650,6 +662,13 @@ export default function ShotBoard({ initialProject, initialScenes }) {
                       </div>
                     )}
                   </div>
+                  <button
+                    className="icon-btn"
+                    title="Clear all pinned start times on this day, so the schedule cascades from the first row"
+                    onClick={() => clearAllPins(day.id, daySceneList)}
+                  >
+                    📍✕
+                  </button>
                   <button className="icon-btn danger" title="Remove day" onClick={() => removeDay(day.id)}>✕</button>
                   <span className="chev">▾</span>
                 </div>
@@ -736,15 +755,20 @@ export default function ShotBoard({ initialProject, initialScenes }) {
 // from prior rows), an editable duration in minutes, and pin/clear controls
 // for anchoring this row's start time and breaking the cascade from here.
 function TimingCell({ scene, timing, onField, onPinStart, onClearStart }) {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState(null); // {top, left} in viewport coords, or null when closed
   const pinned = !!scene.timeAnchor;
 
+  function openMenuAt(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMenuPos({ top: rect.bottom + 4, left: rect.left });
+  }
+
   return (
-    <div className="timing-cell" onContextMenu={(e) => { e.preventDefault(); setMenuOpen(true); }}>
+    <div className="timing-cell" onContextMenu={(e) => { e.preventDefault(); openMenuAt(e); }}>
       {pinned && <span className="timing-pin" title={`Pinned to ${scene.timeAnchor}`}>📍</span>}
       <button
         className="timing-range"
-        onClick={() => setMenuOpen((v) => !v)}
+        onClick={(e) => (menuPos ? setMenuPos(null) : openMenuAt(e))}
         title="Click to pin/clear this row's start time, or right-click anywhere in the cell"
       >
         {formatRange(timing?.start, timing?.end)}
@@ -759,17 +783,20 @@ function TimingCell({ scene, timing, onField, onPinStart, onClearStart }) {
         onChange={(e) => onField("timeDuration", Math.max(0, parseInt(e.target.value, 10) || 0))}
       />
       <span className="timing-duration-suffix">m</span>
-      {menuOpen && (
-        <div className="timing-menu" onMouseLeave={() => setMenuOpen(false)}>
-          <button onClick={() => { setMenuOpen(false); onPinStart(); }}>
-            {pinned ? "Edit pinned start time…" : "Pin start time here…"}
-          </button>
-          {pinned && (
-            <button onClick={() => { setMenuOpen(false); onClearStart(); }}>
-              Clear pin (rejoin cascade)
+      {menuPos && (
+        <>
+          <div className="timing-menu-backdrop" onClick={() => setMenuPos(null)} />
+          <div className="timing-menu" style={{ position: "fixed", top: menuPos.top, left: menuPos.left }}>
+            <button onClick={() => { setMenuPos(null); onPinStart(); }}>
+              {pinned ? "Edit pinned start time…" : "Pin start time here…"}
             </button>
-          )}
-        </div>
+            {pinned && (
+              <button onClick={() => { setMenuPos(null); onClearStart(); }}>
+                Clear pin (rejoin cascade)
+              </button>
+            )}
+          </div>
+        </>
       )}
     </div>
   );

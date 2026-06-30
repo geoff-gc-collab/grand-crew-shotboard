@@ -283,12 +283,12 @@ a.back-link:hover{color:var(--paper);}
   font-family:var(--sans);font-size:12px;padding:6px 8px;outline:none;
 }
 
-.grow .gcell.gcell-timing{overflow:visible;}
-.timing-cell{position:relative;display:flex;align-items:center;gap:3px;width:100%;flex-wrap:wrap;overflow:visible;}
+.timing-cell{position:relative;display:flex;align-items:center;gap:3px;width:100%;flex-wrap:wrap;overflow:hidden;}
 .timing-pin{font-size:10px;flex-shrink:0;}
 .timing-range{
   font-family:var(--sans);font-size:12px;color:var(--paper);background:transparent;border:none;
   cursor:pointer;padding:3px 4px;border-radius:5px;text-align:left;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:100%;
 }
 .timing-range:hover{background:var(--ink-3);}
 .timing-duration{
@@ -299,8 +299,9 @@ a.back-link:hover{color:var(--paper);}
 .timing-duration::-webkit-outer-spin-button, .timing-duration::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 .timing-duration:hover, .timing-duration:focus{background:var(--ink-3);border-color:var(--paper-faint);}
 .timing-duration-suffix{font-family:var(--mono);font-size:10px;color:var(--paper-faint);flex-shrink:0;}
+.timing-menu-backdrop{position:fixed;inset:0;z-index:6;background:transparent;}
 .timing-menu{
-  position:absolute;top:26px;left:0;z-index:7;background:var(--ink-3);border:1px solid var(--line);
+  z-index:7;background:var(--ink-3);border:1px solid var(--line);
   border-radius:7px;padding:4px;min-width:200px;box-shadow:0 8px 24px rgba(0,0,0,0.4);
 }
 .timing-menu button{
@@ -384,7 +385,7 @@ a.back-link:hover{color:var(--paper);}
   body{background:#fff;}
   .back-link, .head-actions, .filters, .tag-legend, .day-controls .icon-btn, .add-row, .add-day-btn,
   .footer-note, .toast, .gpin-right, .drag-handle, .image-slot-actions, .col-remove, .col-form,
-  .lightbox-overlay, .chev, .timing-menu, .timing-pin{
+  .lightbox-overlay, .chev, .timing-menu, .timing-menu-backdrop, .timing-pin{
     display:none !important;
   }
   .wrap.wide{max-width:none;padding:0;margin:0;}
