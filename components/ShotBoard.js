@@ -303,6 +303,7 @@ export default function ShotBoard({ initialProject, initialScenes }) {
             <span>{status === "saving" ? "Saving…" : status === "error" ? "Save failed" : "Saved"}</span>
           </div>
           <button className="btn small" onClick={copySummary}>Copy summary</button>
+          <button className="btn small" onClick={() => window.print()}>Print</button>
         </div>
       </div>
 
@@ -518,7 +519,7 @@ function GridRow({ scene, columns, isDragging, onField, onDelete, onDragStart, o
         return (
           <div className="tag-picker-wrap" style={{ position: "relative" }}>
             <button
-              className="color-tag-chip"
+              className={`color-tag-chip ${local.colorTag ? "tag-set" : ""}`}
               style={local.colorTag ? { background: local.colorTag.color, color: "#0E1116" } : undefined}
               onClick={() => setTagPickerOpen((v) => !v)}
               title="Set color tag"
