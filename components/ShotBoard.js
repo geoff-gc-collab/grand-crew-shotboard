@@ -649,13 +649,23 @@ function GridRow({ scene, columns, isDragging, autoNumber, onField, onCustomFiel
         const setValue = (img) => (isCustom ? changeCustom(col.key, img) : change("images", img ? [img] : []));
         return <SingleImageCell image={value} onChange={setValue} />;
       }
-      default:
-        if (col.key === "num" && autoNumber != null) {
+      case "num":
+        if (autoNumber != null) {
           return <div className="gcell-readonly" title="Auto-numbered by row position">{autoNumber}</div>;
         }
         return (
           <input
             className="gcell-input"
+            value={local.num || ""}
+            onChange={(e) => change("num", e.target.value)}
+          />
+        );
+      default:
+        // Plain text fields wrap onto multiple lines within the fixed row
+        // height (and scroll internally) instead of clipping at one line.
+        return (
+          <textarea
+            className="gcell-textarea"
             value={local[col.key] || ""}
             placeholder={col.key === "title" ? "Untitled scene" : ""}
             onChange={(e) => change(col.key, e.target.value)}

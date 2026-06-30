@@ -273,7 +273,7 @@ a.back-link:hover{color:var(--paper);}
 .grow.dragging{opacity:0.35;}
 .grow .gcell{padding:6px;display:flex;align-items:center;height:100%;overflow:hidden;}
 .grow .gcell.gcell-image{align-items:stretch;justify-content:center;}
-.grow .gcell.gcell-textarea{align-items:stretch;}
+.grow .gcell.gcell-textarea, .grow .gcell.gcell-text{align-items:stretch;}
 .grow .drag-handle{cursor:grab;color:var(--paper-faint);font-size:13px;}
 .grow .drag-handle:hover{color:var(--paper);}
 .grow .icon-btn{width:22px;height:22px;}

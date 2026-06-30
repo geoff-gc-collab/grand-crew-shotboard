@@ -17,6 +17,7 @@ const BLANK_SCENE = {
   colorTag: null,
   intExt: "",
   dayNight: "",
+  dayNightIntExt: "",
   customFields: {},
 };
 
